@@ -9,7 +9,7 @@
 1. Build the campaign
 
 
-> Read the @campaign.md and build me a campaign for "plumber Toronto". Set it to PAUSED until I approve.
+> Read the @campaign.md and build me a campaign for "website automation". Set it to PAUSED until I approve.Here is a link o my website 'https://aniyanetworks.net', so that you can create ads tailored to my website
 
 
 
