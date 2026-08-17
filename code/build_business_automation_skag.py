@@ -183,6 +183,12 @@ def create_campaign(budget_resource):
         client.enums.EuPoliticalAdvertisingStatusEnum.DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING
     )
 
+    # Presence only, not Presence-or-interest (the UI default) — otherwise
+    # people merely researching/interested in the area count as "in" it.
+    campaign.geo_target_type_setting.positive_geo_target_type = (
+        client.enums.PositiveGeoTargetTypeEnum.PRESENCE
+    )
+
     response = service.mutate_campaigns(customer_id=customer_id, operations=[op])
     resource = response.results[0].resource_name
     print(f"* Campaign: {resource}")
