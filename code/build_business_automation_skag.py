@@ -122,7 +122,8 @@ config = {
     "client_id": os.getenv("GOOGLE_ADS_CLIENT_ID"),
     "client_secret": os.getenv("GOOGLE_ADS_CLIENT_SECRET"),
     "refresh_token": os.getenv("GOOGLE_ADS_REFRESH_TOKEN"),
-    "login_customer_id": os.getenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID"),
+    # No login_customer_id: this login has direct access to the target
+    # account, not solely through the MCC hierarchy.
     "use_proto_plus": True,
 }
 client = GoogleAdsClient.load_from_dict(config)
@@ -153,6 +154,7 @@ def create_budget():
     budget.name = f"{CAMPAIGN_NAME} Budget {uuid.uuid4().hex[:6]}"
     budget.amount_micros = DAILY_BUDGET_USD * 1_000_000
     budget.delivery_method = client.enums.BudgetDeliveryMethodEnum.STANDARD
+    budget.explicitly_shared = False  # required for Maximize Conversions (non-portfolio)
     response = service.mutate_campaign_budgets(customer_id=customer_id, operations=[op])
     resource = response.results[0].resource_name
     print(f"* Budget: {resource}")

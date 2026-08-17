@@ -14,7 +14,9 @@ config = {
     "client_id": os.getenv("GOOGLE_ADS_CLIENT_ID"),
     "client_secret": os.getenv("GOOGLE_ADS_CLIENT_SECRET"),
     "refresh_token": os.getenv("GOOGLE_ADS_REFRESH_TOKEN"),
-    "login_customer_id": os.getenv("GOOGLE_ADS_LOGIN_CUSTOMER_ID"),
+    # No login_customer_id: this login has direct access to the target
+    # account, not solely through the MCC hierarchy. Setting it to the MCC
+    # here fails, because the account isn't actually a linked child of it.
     "use_proto_plus": True,
 }
 
@@ -29,6 +31,6 @@ query = """
 """
 
 response = ga_service.search(customer_id=customer_id, query=query)
-print("\n✓ Connection works. First 5 campaigns:\n")
+print("\nConnection works. First 5 campaigns:\n")
 for row in response:
-    print(f"  · {row.campaign.name} ({row.campaign.status.name})")
+    print(f"  - {row.campaign.name} ({row.campaign.status.name})")
