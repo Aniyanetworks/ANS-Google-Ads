@@ -65,7 +65,7 @@
 8. Deploy the website to GitHub
 
 
-> Push the website we built in this project to GitHub and connect Vercel. Domain `[Add your domain here]`. After deploy, confirm the conversion tag fires.
+> Push the website we built in this project to GitHub and connect Vercel. Domain `https://aniyanetworks.net`. After deploy, confirm the conversion tag fires.
 
 
 9. Skills
