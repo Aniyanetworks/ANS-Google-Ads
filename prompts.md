@@ -30,7 +30,7 @@
 4. Build the landing page
 
 
-> Build a landing page for business automation Toronto in the Next.js site. Headline matches the keyword. Form + click-to-call. Hidden fields for gclid and UTMs.
+> Build a landing page for business automation in the Next.js site. Headline matches the keyword. Form + click-to-call. Hidden fields for gclid and UTMs.
 
 
 
