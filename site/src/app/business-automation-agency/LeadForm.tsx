@@ -1,10 +1,12 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { submitLead, type LeadFormState } from "@/app/actions";
 
 const PHONE_DISPLAY = "(437) 476-4488";
 const PHONE_TEL = "+14374764488";
+const CONVERSION_LABEL = process.env.NEXT_PUBLIC_GADS_CONVERSION_LABEL ?? "";
 
 const initialState: LeadFormState = { status: "idle", message: "" };
 
@@ -19,6 +21,13 @@ type TrackingParams = {
 
 export default function LeadForm({ tracking }: { tracking: TrackingParams }) {
   const [state, formAction, pending] = useActionState(submitLead, initialState);
+  const router = useRouter();
+
+  useEffect(() => {
+    if (state.status === "success") {
+      router.push(`/thank-you?label=${encodeURIComponent(CONVERSION_LABEL)}`);
+    }
+  }, [state.status, router]);
 
   return (
     <div id="lead-form" className="grid gap-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-10 md:grid-cols-2 md:gap-12">

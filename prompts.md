@@ -38,7 +38,7 @@
 5. Add the conversion tracking + build a remarketing audience
 
 
-> Read the @setup-conversion-tracking-and-audience.md and run it end-to-end. Domain `[Add your domain here]`, attach the audience to my business automation ad group at +50%.
+> Read the @setup-conversion-tracking-and-audience.md and run it end-to-end. Domain `https://aniyanetworks.net`, attach the audience to my business automation ad group at +50%.
 
 
 6. Checking the conversion tracking is working
