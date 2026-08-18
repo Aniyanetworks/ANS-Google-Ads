@@ -17,12 +17,12 @@
 2. Build the ads
 
 
-> Read the @anatomy-of-a-good-ad.md and build me 3 RSAs for the emergency plumber Toronto campaign. Add them into Google Ads and mark them as paused. Also read the @ad-assets-best-practices.md and add the asset structure to my emergency plumber campaign.
+> Read the @anatomy-of-a-good-ad.md and build me 3 RSAs for the business automation agency campaign. Add them into Google Ads and mark them as paused. Also read the @ad-assets-best-practices.md and add the asset structure to my  business automation campaign.
 
 
 3. Negative keywords
 
-> Read the @universal-negative-keywords.md and add the full universal negative keyword list to my account as a Shared Negative Keyword List, then attach it to my emergency plumber campaign. Use BROAD match unless the term is in quotes or brackets.
+> Read the @universal-negative-keywords.md and add the full universal negative keyword list to my account as a Shared Negative Keyword List, then attach it to my business automation campaign. Use BROAD match unless the term is in quotes or brackets.
 
 
 
@@ -30,7 +30,7 @@
 4. Build the landing page
 
 
-> Build a landing page for emergency plumber Toronto in the Next.js site. Headline matches the keyword. Form + click-to-call. Hidden fields for gclid and UTMs.
+> Build a landing page for business automation Toronto in the Next.js site. Headline matches the keyword. Form + click-to-call. Hidden fields for gclid and UTMs.
 
 
 
@@ -38,7 +38,7 @@
 5. Add the conversion tracking + build a remarketing audience
 
 
-> Read the @setup-conversion-tracking-and-audience.md and run it end-to-end. Domain `[Add your domain here]`, attach the audience to my emergency plumber ad group at +50%.
+> Read the @setup-conversion-tracking-and-audience.md and run it end-to-end. Domain `[Add your domain here]`, attach the audience to my business automation ad group at +50%.
 
 
 6. Checking the conversion tracking is working
@@ -57,7 +57,7 @@
 7. Find search terms bleeding money and add them to negatives
 
 
-> Read the @find-and-add-negatives.md and run it on my emergency plumber campaign. Show me the list with verdicts before adding anything.
+> Read the @find-and-add-negatives.md and run it on my business automation campaign. Show me the list with verdicts before adding anything.
 
 
 
