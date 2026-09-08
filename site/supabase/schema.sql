@@ -277,6 +277,8 @@ create policy "authenticated can insert campaign_chat_messages" on campaign_chat
   for insert to authenticated with check (true);
 create policy "authenticated can update campaign_chat_messages" on campaign_chat_messages
   for update to authenticated using (true) with check (true);
+create policy "authenticated can delete campaign_chat_messages" on campaign_chat_messages
+  for delete to authenticated using (true);
 
 -- Keep campaigns.updated_at current on every update.
 create or replace function set_updated_at()

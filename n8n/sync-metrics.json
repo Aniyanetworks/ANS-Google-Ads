@@ -280,7 +280,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const campaign = $('Filter buildable campaigns').item.json;\nconst metricsRow = $('Build metrics row').item.json;\nconst recRows = $('Get fresh recommendations').all().map(i => i.json);\nconst roas = metricsRow.cost > 0 ? metricsRow.conversions_value / metricsRow.cost : null;\nconst recsText = recRows.length\n  ? recRows.map(r => '- ' + r.type + ': $' + r.dollars_recoverable + ' recoverable').join('\\n')\n  : 'None currently open.';\n\nreturn [{\n  json: {\n    campaignName: campaign.campaignName,\n    status: campaign.status,\n    dailyBudgetUsd: campaign.dailyBudgetUsd,\n    date: metricsRow.date,\n    cost: metricsRow.cost,\n    conversions: metricsRow.conversions,\n    conversionsValue: metricsRow.conversions_value,\n    roas,\n    recommendationsText: recsText,\n  },\n}];\n"
+        "jsCode": "const campaign = $('Filter buildable campaigns').item.json;\nconst metricsRow = $('Build metrics row').item.json;\nconst recRows = $('Get fresh recommendations').all().map(i => i.json).filter(r => r && r.id);\nconst roas = metricsRow.cost > 0 ? metricsRow.conversions_value / metricsRow.cost : null;\nconst recsText = recRows.length\n  ? recRows.map(r => '- ' + r.type + ': $' + r.dollars_recoverable + ' recoverable').join('\\n')\n  : 'None currently open.';\n\nreturn [{\n  json: {\n    campaignName: campaign.campaignName,\n    status: campaign.status,\n    dailyBudgetUsd: campaign.dailyBudgetUsd,\n    date: metricsRow.date,\n    cost: metricsRow.cost,\n    conversions: metricsRow.conversions,\n    conversionsValue: metricsRow.conversions_value,\n    roas,\n    recommendationsText: recsText,\n  },\n}];\n"
       },
       "id": "build-suggestion-context-1",
       "name": "Build suggestion context",

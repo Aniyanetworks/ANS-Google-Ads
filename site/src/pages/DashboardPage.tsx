@@ -162,6 +162,15 @@ export default function DashboardPage() {
               Account
             </Link>
             <button
+              onClick={async () => {
+                await supabase.auth.signOut();
+                window.location.href = "/login";
+              }}
+              className="rounded-lg border-2 border-slate-300 px-4 py-2 text-sm font-semibold text-slate-500 hover:border-red-300 hover:text-red-600"
+            >
+              Logout
+            </button>
+            <button
               onClick={() => setShowIntake(true)}
               className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
             >

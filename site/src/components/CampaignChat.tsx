@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
+import ConfirmDialog from "./ConfirmDialog";
 
 type ProposedAction = {
   action_type: "update_daily_budget" | "pause_campaign" | "resume_campaign";
@@ -34,6 +35,9 @@ export default function CampaignChat({ campaignId }: { campaignId: string | null
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [actingOnId, setActingOnId] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [confirmingReset, setConfirmingReset] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -110,6 +114,22 @@ export default function CampaignChat({ campaignId }: { campaignId: string | null
     setActingOnId(null);
   }
 
+  async function resetConversation() {
+    if (!campaignId) return;
+    setResetting(true);
+    await supabase.from("campaign_chat_messages").delete().eq("campaign_id", campaignId);
+    await load();
+    setResetting(false);
+    setConfirmingReset(false);
+  }
+
+  async function deleteMessage(id: string) {
+    setDeletingId(id);
+    await supabase.from("campaign_chat_messages").delete().eq("id", id);
+    await load();
+    setDeletingId(null);
+  }
+
   async function dismissAction(message: ChatMessage) {
     setActingOnId(message.id);
     await supabase
@@ -130,6 +150,17 @@ export default function CampaignChat({ campaignId }: { campaignId: string | null
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white">
+      {messages !== null && messages.length > 0 && (
+        <div className="flex justify-end border-b border-slate-200 px-4 py-2">
+          <button
+            onClick={() => setConfirmingReset(true)}
+            className="text-xs font-semibold text-slate-400 hover:text-red-600"
+          >
+            Reset conversation
+          </button>
+        </div>
+      )}
+
       <div className="max-h-96 space-y-3 overflow-y-auto p-4">
         {messages === null && <p className="text-sm text-slate-500">Loading...</p>}
         {messages !== null && messages.length === 0 && (
@@ -137,14 +168,28 @@ export default function CampaignChat({ campaignId }: { campaignId: string | null
         )}
 
         {messages?.map((m) => (
-          <div key={m.id} className={m.role === "user" ? "flex justify-end" : "flex justify-start"}>
+          <div
+            key={m.id}
+            className={
+              (m.role === "user" ? "flex justify-end" : "flex justify-start") + " group"
+            }
+          >
             <div
               className={
-                m.role === "user"
+                (m.role === "user"
                   ? "max-w-[80%] rounded-2xl bg-slate-900 px-4 py-2 text-sm text-white"
-                  : "max-w-[80%] rounded-2xl bg-slate-100 px-4 py-2 text-sm text-slate-800"
+                  : "max-w-[80%] rounded-2xl bg-slate-100 px-4 py-2 text-sm text-slate-800") +
+                " relative"
               }
             >
+              <button
+                onClick={() => deleteMessage(m.id)}
+                disabled={deletingId === m.id}
+                title="Delete message"
+                className="absolute -top-2 -right-2 flex h-5 w-5 items-center justify-center rounded-full bg-white text-xs text-slate-400 shadow opacity-0 transition-opacity hover:text-red-600 group-hover:opacity-100 disabled:opacity-60"
+              >
+                ×
+              </button>
               <p className="whitespace-pre-wrap">{m.content}</p>
 
               {m.proposed_action && (
@@ -207,6 +252,17 @@ export default function CampaignChat({ campaignId }: { campaignId: string | null
           {sending ? "..." : "Send"}
         </button>
       </div>
+
+      {confirmingReset && (
+        <ConfirmDialog
+          title="Reset this conversation?"
+          message="This permanently deletes the entire chat history for this campaign, including any pending suggestions. This does not undo anything already applied to Google Ads."
+          confirmLabel={resetting ? "Resetting..." : "Reset"}
+          danger
+          onCancel={() => setConfirmingReset(false)}
+          onConfirm={resetConversation}
+        />
+      )}
     </div>
   );
 }
