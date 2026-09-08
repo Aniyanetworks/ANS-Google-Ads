@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import IntakeModal from "../components/IntakeModal";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 type ClientRow = {
   id: string;
@@ -24,6 +25,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [showIntake, setShowIntake] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [pendingDelete, setPendingDelete] = useState<ClientRow | null>(null);
 
   useEffect(() => {
     async function load() {
@@ -101,11 +103,6 @@ export default function DashboardPage() {
   }, [refreshKey]);
 
   async function handleDelete(client: ClientRow) {
-    const confirmed = window.confirm(
-      `Delete ${client.name} (${client.business_name})? This removes the client and all their campaign data — it does not touch anything already built in Google Ads.`
-    );
-    if (!confirmed) return;
-
     const { error } = await supabase.from("clients").delete().eq("id", client.id);
     if (error) {
       window.alert(`Delete failed: ${error.message}`);
@@ -233,7 +230,7 @@ export default function DashboardPage() {
                           </button>
                         )}
                         <button
-                          onClick={() => handleDelete(c)}
+                          onClick={() => setPendingDelete(c)}
                           className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50"
                         >
                           Delete
@@ -253,6 +250,20 @@ export default function DashboardPage() {
           onClose={() => {
             setShowIntake(false);
             setRefreshKey((k) => k + 1);
+          }}
+        />
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`Delete ${pendingDelete.name}?`}
+          message={`This removes ${pendingDelete.business_name} and all their campaign data from the dashboard — it does not touch anything already built in Google Ads.`}
+          confirmLabel="Delete"
+          danger
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={async () => {
+            await handleDelete(pendingDelete);
+            setPendingDelete(null);
           }}
         />
       )}

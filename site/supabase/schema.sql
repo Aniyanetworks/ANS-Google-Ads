@@ -161,6 +161,8 @@ create policy "authenticated can read campaigns" on campaigns
   for select to authenticated using (true);
 create policy "authenticated can update campaigns" on campaigns
   for update to authenticated using (true) with check (true);
+create policy "authenticated can delete campaigns" on campaigns
+  for delete to authenticated using (true);
 
 -- campaign_metrics / recommendations: written only by the service_role key
 -- (n8n/Python sync jobs), read-only for the agency in the browser.
