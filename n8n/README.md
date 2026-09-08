@@ -1,27 +1,45 @@
 # n8n workflows
 
-Four workflows, all as importable JSON in this folder.
+Six workflows, all as importable JSON in this folder: `build-campaign`,
+`sync-metrics`, `client-message-to-draft`, `send-reply`, `campaign-chat`,
+and `apply-campaign-action`.
+
+**No email anywhere in client communication.** Clients reach the agency
+through an in-app chat on a public, login-free portal page
+(`site/src/pages/ClientPortalPage.tsx`, route `/client/:clientId` — the
+client's UUID itself is the "magic link" token, nothing separate to
+manage). The agency replies from the dashboard's Messages tab exactly as
+before; approving a draft now inserts a new row back into `messages`
+instead of sending a Gmail. `client-email-to-draft.json` (Gmail Trigger
+based) is gone — replaced by `client-message-to-draft.json`, a webhook the
+portal page calls after inserting a client's message.
 
 **Architecture history, for context:** this started as n8n orchestrating +
 Python (`code/`) doing the actual Google Ads talking, since that Python
 code was already proven this session. That needed either n8n's Execute
 Command node (disabled on your instance via `NODES_EXCLUDE`, a sensible
 security default) or a separately-hosted API service (`code/api_server.py`,
-still in this repo but no longer used by these workflows — you decided
-against standing up separate hosting for it). **`build-campaign.json` is
-now rebuilt natively in n8n** — every Google Ads API call is a direct HTTP
-Request node inside the workflow itself, no external service required.
-`sync-metrics.json` and `send-reply.json`'s deferred action-application
-step still reference the old `api_server.py` approach and need the same
-native rewrite — flag it if you want that done next.
+still in this repo but no longer used by any of these workflows — you
+decided against standing up separate hosting for it). **Every workflow is
+now rebuilt natively in n8n**, including `sync-metrics.json` as of this
+session — every Google Ads API call and every Supabase read/write is a
+direct node inside the workflow itself, no external service and no `$env`
+access required (both were blocked on your instance).
+`code/sync_all_clients.py` remains the proven Python fallback for a manual
+sync if the n8n version ever needs debugging.
 
-**Important — this native version is untested.** I don't have live n8n
-access, so unlike `code/build_client_campaign.py` (which I ran against
-your real account and verified this session), `build-campaign.json` has
-not executed even once. Expect to debug it against a real (ideally
-disposable/test) client account before trusting it for real client
-campaigns. `code/build_client_campaign.py` remains the proven fallback if
-this doesn't work.
+**`build-campaign.json` has been tested step-by-step against your real
+account this session** — every node in it, from credentials fetch through
+budget/campaign/geo/negatives/ad group/keyword/RSA creation, has been run
+live and fixed against real errors (wrong endpoints, the direct-access vs.
+MCC-child `login-customer-id` distinction, Supabase field-shape mismatches,
+etc.). `client-message-to-draft.json`, `send-reply.json`, `campaign-chat.json`,
+and `apply-campaign-action.json` reuse those same proven patterns
+(native Supabase nodes, the same OAuth refresh + JSON-header approach for
+Google Ads calls) but have **not** all been run live yet — treat anything
+below marked "untested" accordingly. `code/build_client_campaign.py`
+remains the proven Python fallback for building a campaign if the n8n
+version ever breaks in a way that's faster to route around than debug.
 
 **$env is also blocked** on top of Execute Command, so hardcoded secrets
 in the workflow JSON weren't an option either. Instead: Google Ads
@@ -51,47 +69,45 @@ else it repeats.
 ## Import
 
 In n8n: **Workflows → Import from File** → pick each `.json` in this
-folder. All four import as separate workflows named `build-campaign`,
-`sync-metrics`, `client-email-to-draft`, `send-reply`.
+folder. All six import as separate workflows named `build-campaign`,
+`sync-metrics`, `client-message-to-draft`, `send-reply`, `campaign-chat`, and
+`apply-campaign-action`.
 
 ## One-time setup after importing
 
-**Environment variables** (self-hosted: set in n8n's `.env` / process
-environment and restart n8n; if `$env` access is blocked in your instance,
-replace the affected header values with n8n Header Auth credentials
-instead — this applies to `sync-metrics.json` and `send-reply.json` only;
-`build-campaign.json` doesn't use `$env` at all since it hit this same
-wall and was rebuilt with hardcoded values instead, see below):
-- `INTERNAL_API_URL` — wherever `api_server.py` is reachable from n8n, e.g.
-  `http://localhost:8000` (same host) or `http://api:8000` (sibling
-  container on the same Docker network)
-- `INTERNAL_API_KEY` — same value as the project's `.env`
-- `SUPABASE_URL` — same value as the project's `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY` — same value as the project's
-  `SUPABASE_SERVICE_ROLE_KEY`
-
-No separate "from address" env var is needed for outbound replies — the
-Gmail node sends from whichever account its credential is authorized for.
+**Environment variables** — none needed by any of the six workflows.
+`$env` access is blocked on your instance, so nothing in this folder
+relies on it anymore.
 
 **Credentials** (Settings → Credentials → + Add):
-- **Supabase** — used by `build-campaign.json`'s 4 Supabase-type nodes
-  ("Get Google Ads credentials", "Get campaign", "Get client", "Mark
-  building", "Mark paused" — that's 5, all Supabase node type). Create it
-  with your project's URL + **service_role key** (not anon — these calls
-  need to bypass RLS the same way the Python scripts do). After import,
-  open each of those 5 nodes and select the credential (they ship with a
+- **Supabase** — one credential, reused across every Supabase-type node in
+  all six workflows (`build-campaign.json`: "Get Google Ads credentials",
+  "Get campaign", "Get client", "Mark building", "Mark paused";
+  `client-message-to-draft.json`: "Get message", "Get client", "Get
+  campaign", "Get campaign metrics", "Get open recommendations", "Save
+  draft to message"; `send-reply.json`: "Get message", "Get campaign for
+  action", "Get Google Ads credentials", "Insert outbound message", "Mark
+  inbound message replied"; `campaign-chat.json`: "Insert user message",
+  "Get campaign", "Get campaign metrics", "Get open recommendations", "Get
+  recent chat history", "Insert assistant message";
+  `apply-campaign-action.json`: "Get campaign", "Get Google Ads
+  credentials", "Mark chat message applied"; `sync-metrics.json`: "Get
+  Google Ads credentials", "Get all campaigns", "Delete existing metrics
+  row", "Create metrics row", "Get fresh recommendations", "Insert
+  proactive suggestion", "Delete existing open recommendations", "Create
+  recommendation row" — 33 nodes total). Create it with your project's URL
+  + **service_role key** (not anon — these calls need to bypass RLS the
+  same way the Python scripts do). After import, open each of those nodes
+  in every workflow and select the credential (they ship with a
   placeholder credential reference that won't resolve on its own).
-- **Anthropic** — used by `client-email-to-draft`'s AI Agent. After
-  import, open that workflow's "Anthropic Chat Model" node and select your
-  credential (the JSON ships with a placeholder credential reference that
-  won't resolve on its own)
-- **Gmail (OAuth2)** — your client-support Gmail account, used by both
-  `client-email-to-draft`'s Gmail Trigger (reading) and `send-reply`'s
-  Gmail node (sending). One credential covers both — after import, open
-  each workflow's Gmail-type node and select it (the JSON ships with a
-  placeholder credential reference that won't resolve on its own). n8n
-  will walk you through the Google OAuth consent flow the first time you
-  create this credential.
+- **Anthropic** — used by `client-message-to-draft.json`'s,
+  `campaign-chat.json`'s, and `sync-metrics.json`'s AI Agent nodes (same
+  credential works for all three). After import, open each workflow's
+  "Anthropic Chat Model" node and select your credential (the JSON ships
+  with a placeholder credential reference that won't resolve on its own)
+
+No Gmail credential is needed anywhere — client communication is entirely
+in-app now (see the top of this file).
 
 **`build-campaign.json`'s Google Ads OAuth values** (client id/secret,
 refresh token) still need one manual step even with credentials/settings
@@ -165,49 +181,101 @@ in Supabase if needed (it'll be stuck on `status='building'`).
 
 ## 2. sync-metrics.json
 
-**Trigger:** Schedule, daily
+**Trigger:** Schedule (daily; the default n8n Schedule Trigger UI fires at
+midnight in the instance's timezone — adjust the node if you want a
+specific hour)
 
-**Not yet updated** — still calls `api_server.py`'s `/sync-metrics`, which
-you decided not to host. This one hasn't been rebuilt natively yet: it
-needs a loop over every campaign row (variable count, so it needs n8n's
-Loop Over Items node) with a two-way branch per item depending on whether
-that campaign's Google Ads account is a direct-access account (no
-`login-customer-id` header — currently just AniyaNetworks) or a proper MCC
-child (`login-customer-id: 1616859870`, true for every new client account
-going forward). That's more moving parts than `build-campaign` had, and I
-held off building it blind in the same pass — say the word and I'll do it
-next. Until then, `code/sync_all_clients.py` still works standalone
-(`py code/sync_all_clients.py`, run manually or on a plain OS-level cron/
-Task Scheduler entry — no n8n involvement needed).
+21 nodes. Mirrors `code/sync_all_clients.py`'s two jobs (metrics +
+recommendations) natively, plus a new third thing: a proactive AI
+suggestion, posted straight into the Campaign Assistant chat.
 
-## 3. client-email-to-draft.json
+Flow: Schedule Trigger → **Get Google Ads credentials** → **Refresh Google
+Ads token** → **Get all campaigns** (native Supabase `getAll`, no filter —
+`returnAll: true`, unverified for a multi-row table) → **Filter buildable
+campaigns** (Code node — keeps only rows with both
+`google_ads_customer_id` and `google_ads_campaign_resource` set; one
+output item per valid campaign, everything downstream processes each
+independently) → two parallel branches per campaign:
 
-**Trigger:** Gmail Trigger, polling your client-support Gmail inbox every
-minute
+- **Metrics branch:** **Search campaign metrics** (`googleAds:search`,
+  GAQL `segments.date DURING YESTERDAY` — deliberately scoped to a single
+  day rather than a trailing window, so this stays one item per campaign
+  the whole way through instead of fanning out into N day-rows, which
+  would need a Merge node to safely reconverge before the proactive-AI
+  step) → **Build metrics row** (falls back to a zero-valued row if Google
+  returns nothing for a genuine no-spend day, keeping daily history
+  gap-free) → **Delete existing metrics row** → **Create metrics row**
+  (delete-then-create instead of upsert, since the native Supabase node's
+  upsert support is unverified — makes re-running the same day idempotent)
+  → **Get fresh recommendations** → **Build suggestion context** (Code —
+  ROAS + recommendations as plain text) → **Suggest (AI Agent)**, fed by
+  an **Anthropic Chat Model** and a **Structured Output Parser**
+  (`should_post`, `message`, `proposed_action` — same tightened
+  action schema as everywhere else) → **Prepare suggestion** → **Should
+  post?** (IF) → **Insert proactive suggestion** (native Supabase
+  `create`, `campaign_chat_messages`) if true, otherwise nothing.
+- **Recommendations branch:** **Search recommendations** (same GAQL as
+  the Python version) → **Delete existing open recommendations** for this
+  campaign (clears stale ones — correct, not just idempotent: a
+  recommendation Google Ads stops surfacing should stop showing as
+  "open," and this never touches already-applied/dismissed rows) →
+  **Build recommendation items** (one item per recommendation) → **Create
+  recommendation row** (runs once per item automatically).
 
-Flow: Gmail Trigger → **Extract sender email** (Code node, pulls the bare
-address out of `"Name <email>"` format) → **Look up client** (HTTP Request
-to Supabase, filter by email) → **Client found?** (IF) →
-- not found: Notify (No-Op placeholder) and stop
-- found: **Get client's campaign** (HTTP Request) → **Insert inbound
-  message** (HTTP Request, `Prefer: return=representation` so we get the
-  new row's id back) → **Draft reply (AI Agent)**, fed by an **Anthropic
-  Chat Model** sub-node and a **Structured Output Parser** (schema:
-  `{ reply: string, proposed_action: object | null }`) → **Save draft to
-  message** (HTTP Request PATCH, sets `ai_draft_body`, `proposed_action`,
-  `status: "drafted"`) → Notify (No-Op placeholder) with a dashboard link
+**The proactive suggestion is deliberately conservative.** The system
+prompt tells the AI to set `should_post: false` unless something genuinely
+stands out (real dollar impact, a clear performance problem, an obviously
+binding budget) — the instruction is explicit that a missed suggestion is
+far better than noise the agency starts ignoring. Most days, most
+campaigns, should post nothing.
 
-The system prompt on the AI Agent node explicitly tells it this draft will
-be human-reviewed before anything sends, and not to promise or claim
-anything it isn't instructed to.
+**Known race, accepted as a simplification:** the metrics and
+recommendations branches run concurrently with no explicit
+synchronization, so "Get fresh recommendations" (metrics branch) could in
+rare cases read slightly-stale data if the recommendations branch hasn't
+finished writing yet for that run. Low-stakes for a proactive nudge —
+fixing it properly would mean a Merge node whose exact wait-for-both
+semantics I haven't verified live, so it's left as a documented tradeoff
+rather than guessed at.
 
-**Field name caveat:** the Gmail Trigger's exact output field names
-(`from`, `subject`, `text`/`snippet`) match n8n's standard shape (with
-Simplify on) as of recent versions, but I couldn't verify against your
-actual instance. Run one test execution after setting up the Gmail
-credential and check the trigger node's output panel — adjust the
-"Extract sender email" Code node if the field
-names differ.
+**Untested end-to-end**, like everything built without live access this
+session — the `delete` operation on the native Supabase node in particular
+has never been used in any workflow before this one. `code/sync_all_clients.py`
+remains a proven manual fallback (`py code/sync_all_clients.py`) if this
+needs debugging.
+
+## 3. client-message-to-draft.json
+
+**Trigger:** Webhook, path `/client-message`, POST
+**Called by:** `ClientPortalPage.tsx`, right after it inserts a client's
+message via the `insert_client_message` Postgres RPC. Payload:
+`{ "message_id": "<uuid>" }`
+
+This replaces the old Gmail-Trigger-based `client-email-to-draft.json` —
+same idea (AI drafts a reply for the agency to review), different trigger,
+since there's no email involved anymore.
+
+Flow: Webhook → **Validate message_id** → **Get message** (native
+Supabase) → **Get client** (for `business_name` context) → **Get
+campaign** (native Supabase `getAll`, limit 1, `alwaysOutputData` on — a
+client with no campaign yet is a real, expected case) → **Get campaign
+metrics** → **Get open recommendations** (both same pattern, grounding the
+AI's suggestions in real numbers rather than generic advice) → **Build AI
+context** (Code node — sums the metrics into a ROAS figure, formats
+recommendations as plain text) → **Draft reply (AI Agent)**, fed by an
+**Anthropic Chat Model** and a **Structured Output Parser** with the same
+tightened schema used everywhere else (`proposed_action` is `null` unless
+it's exactly `update_daily_budget`/`pause_campaign`/`resume_campaign`) →
+**Save draft to message** (native Supabase `update` — sets `ai_draft_body`,
+`proposed_action`, `status: "drafted"`, and backfills `campaign_id` on the
+message row since `insert_client_message()` doesn't set it) → Notify
+(No-Op placeholder) with a dashboard link.
+
+**Unverified:** the Supabase `create`/`getAll` operation names haven't
+been exercised against your live instance yet in this exact workflow (they
+match the pattern proven in `build-campaign.json`, but this specific chain
+hasn't run). Send a real message through the client portal once it's
+wired up and tell me what breaks.
 
 ## 4. send-reply.json
 
@@ -217,18 +285,118 @@ names differ.
 `{ "message_id": "<uuid>" }`
 
 Flow: Webhook → **Validate message_id** (same UUID-shape guard) → **Get
-message** (HTTP Request) → **Has proposed_action?** (IF) →
-- yes: **Apply proposed action** (HTTP Request to `api_server.py`'s
-  `/apply-action`) → Send reply email
-- no: straight to Send reply email
+message** (native Supabase node) → **Has proposed_action?** (IF) →
+- no: straight to Insert outbound message
+- yes: **Get campaign for action** (native Supabase `get`, by
+  `messages.campaign_id`) → **Get Google Ads credentials** → **Refresh
+  Google Ads token (action)** → **Build campaign action body** (Code node —
+  maps `proposed_action.action_type` to the right Google Ads mutate call:
+  `update_daily_budget` → `campaignBudgets:mutate` update against
+  `campaigns.google_ads_budget_resource`; `pause_campaign`/
+  `resume_campaign` → `campaigns:mutate` update against
+  `campaigns.google_ads_campaign_resource`, setting `status`) → **Apply
+  campaign change** (HTTP Request — actually calls the Google Ads API,
+  same `jsonHeaders`/direct-access-vs-MCC pattern as `build-campaign.json`)
+  → Insert outbound message
 
-→ **Send reply email** (Gmail node) → **Mark message sent** (HTTP Request PATCH,
-`status: "sent"`, `sent_at: now()`)
+→ **Insert outbound message** (native Supabase `create` — the approved
+reply text becomes a brand new `messages` row, `direction: "outbound"`,
+`channel: "in_app"`, `status: "sent"`; the client sees it on their next
+portal load, no email involved) → **Mark inbound message replied** (native
+Supabase `update` on the *original* inbound row, `status: "sent"`, purely
+so `MessageThread.tsx` stops showing its draft-editing box for that row —
+the actual reply content now lives on the new outbound row, not this one).
 
-**`/apply-action` currently returns 501 Not Implemented.** I deliberately
-held off building the real dispatch logic (`code/apply_action.py`, which
-`/apply-action` would call) until we've seen a few real `proposed_action`
-shapes come out of workflow 3 in practice — it should match what the AI
-actually proposes, not a guess. The "has proposed_action" branch will fail
-until that's built. Happy to build it as soon as you have a few real
-examples, or scope a first version now if you'd rather not wait.
+**The old `api_server.py`/`/apply-action` approach is gone** — replaced
+with native nodes this session, matching every other Google Ads call in
+this project. Real, but two things to know:
+- **`google_ads_budget_resource`** is a new `campaigns` column, only
+  populated by `build-campaign.json` going forward (its "Mark paused
+  (success)" node now saves it). Any campaign built *before* this change
+  won't have it, so `update_daily_budget` will throw a clear error for
+  those until you backfill the column manually in Supabase or rebuild the
+  campaign.
+- **Untested end-to-end** — this chain has never actually run against a
+  real `proposed_action`, since none has come out of
+  `client-message-to-draft.json` yet. The individual node patterns
+  (credentials fetch, token refresh, conditional `login-customer-id`, JSON
+  headers) are all copied from `build-campaign.json`'s proven-working
+  versions, but the full chain needs a real test — either wait for a real
+  client portal message that proposes a budget/pause change, or manually
+  set a `proposed_action` on a test message row and hit the webhook
+  directly to exercise it.
+
+## 5. campaign-chat.json
+
+**Trigger:** Webhook, path `/campaign-chat`, POST
+**Called by:** the dashboard's **Campaign Assistant** panel on a client's
+detail page (`site/src/components/CampaignChat.tsx`), payload
+`{ "campaign_id": "<uuid>", "message": "<text>" }`
+
+This is a separate thing from `client-message-to-draft.json`/`send-reply.json`
+— those are the client-facing in-app correspondence loop. This one is the
+**agency chatting directly with AI about one campaign**, inside the
+dashboard, with real performance data and open recommendations pulled in
+as context so it can give grounded suggestions, not generic advice.
+
+Flow: Webhook → **Validate input** (UUID + non-empty message guard) →
+**Insert user message** (native Supabase `create`, `campaign_chat_messages`,
+`role: "user"`) → **Get campaign** → **Get campaign metrics** (native
+Supabase `getAll`, `alwaysOutputData` on — a brand-new campaign with
+nothing synced yet is expected, not an error) → **Get open
+recommendations** (same) → **Get recent chat history** (same, last 50
+rows) → **Build AI context** (Code node — sums cost/conversions/value from
+the metrics rows into a ROAS figure, formats the recommendations and last
+20 chat turns as plain text) → **Chat (AI Agent)**, fed by an **Anthropic
+Chat Model** and a **Structured Output Parser** with the same tightened
+schema as `client-message-to-draft.json` (`proposed_action` is `null` unless
+it's exactly `update_daily_budget`/`pause_campaign`/`resume_campaign`) →
+**Prepare assistant message** (Code node, sets `action_status: "proposed"`
+if there's a `proposed_action`, else `null`) → **Insert assistant message**
+(native Supabase `create`) → **Respond to Webhook** (returns the assistant
+turn as JSON — `CampaignChat.tsx` doesn't actually rely on parsing this
+response though, it just reloads the full thread from Supabase after the
+fetch resolves, so a mismatch here isn't fatal, just means one extra round
+trip before you see the reply).
+
+**Confirm & Apply, not auto-apply:** exactly like the client-email flow,
+the AI only *proposes* an action here — the agency has to click "Confirm &
+Apply" in the chat UI, which calls `apply-campaign-action.json` (below).
+There is no path in this workflow that touches Google Ads directly.
+
+**Untested end-to-end**, same caveat as everything built this session
+without live access: the `create`/`getAll` Supabase operation names, the
+AI Agent's structured output, and the `Respond to Webhook` field names are
+all best-guess based on the patterns proven elsewhere. Run one real chat
+message through it and tell me what breaks.
+
+## 6. apply-campaign-action.json
+
+**Trigger:** Webhook, path `/apply-campaign-action`, POST
+**Called by:** the "Confirm & Apply" button in `CampaignChat.tsx`, payload
+`{ "campaign_id": "<uuid>", "chat_message_id": "<uuid>", "proposed_action": {...} }`
+
+The actual Google Ads mutation logic here is a direct copy of
+`send-reply.json`'s "Build campaign action body" → "Apply campaign change"
+pair — same three action types, same `google_ads_budget_resource`
+dependency and caveat for older campaigns, same direct-access-vs-MCC
+`login-customer-id` handling. The only difference is where the
+`proposed_action` comes from (the webhook payload directly, not a
+`messages` row lookup) and what gets marked afterward: **Mark chat message
+applied** sets `campaign_chat_messages.action_status = "applied"` on the
+originating chat row so the UI can show "✓ Applied" instead of leaving the
+Confirm/Dismiss buttons showing forever.
+
+Flow: Webhook → **Validate input** → **Get campaign** → **Get Google Ads
+credentials** → **Refresh Google Ads token** → **Build campaign action
+body** → **Apply campaign change** → **Mark chat message applied** →
+**Respond to Webhook**.
+
+This workflow and `send-reply.json`'s action-application branch duplicate
+the same ~40 lines of mutate-building logic rather than sharing a
+sub-workflow — deliberate, to keep every workflow file fully
+self-contained and independently importable (no cross-workflow ID
+references that would break on import into a fresh instance). If the
+mutate logic ever needs a fix, it needs to be applied in both places —
+`send-reply.json`'s "Build campaign action body" and this file's node of
+the same name.

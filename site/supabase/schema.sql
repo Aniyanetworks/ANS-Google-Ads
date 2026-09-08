@@ -45,6 +45,7 @@ create table if not exists campaigns (
     check (status in ('pending', 'building', 'active', 'paused', 'error')),
   google_ads_campaign_resource text,
   google_ads_ad_group_resource text,
+  google_ads_budget_resource text,
   error_message text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -99,6 +100,80 @@ create table if not exists messages (
 
 create index if not exists messages_client_id_idx on messages(client_id);
 
+-- Client portal access: no client login. A client reaches their message
+-- thread via an unguessable magic link (/client/<client_id> — the
+-- client_id UUID itself is the "token", nothing separate to manage). The
+-- portal page talks to Supabase with the anon key but never touches
+-- `messages`/`clients` directly with a broad RLS policy — instead it calls
+-- these two SECURITY DEFINER functions, which internally bypass RLS but
+-- only ever act on the exact client_id passed in as an argument. That
+-- keeps the anon key from being able to enumerate or read any other
+-- client's data, without needing real auth.
+create or replace function get_client_portal_data(p_client_id uuid)
+returns table (
+  business_name text,
+  message_id uuid,
+  direction text,
+  body text,
+  status text,
+  created_at timestamptz
+)
+language sql
+security definer
+set search_path = public
+as $$
+  select c.business_name, m.id, m.direction, m.body, m.status, m.created_at
+  from clients c
+  left join messages m on m.client_id = c.id
+  where c.id = p_client_id
+  order by m.created_at asc;
+$$;
+
+create or replace function insert_client_message(p_client_id uuid, p_body text)
+returns messages
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  new_row messages;
+begin
+  if not exists (select 1 from clients where id = p_client_id) then
+    raise exception 'invalid client';
+  end if;
+  if p_body is null or trim(p_body) = '' then
+    raise exception 'empty message';
+  end if;
+  insert into messages (client_id, direction, channel, body, status)
+  values (p_client_id, 'inbound', 'in_app', trim(p_body), 'new')
+  returning * into new_row;
+  return new_row;
+end;
+$$;
+
+grant execute on function get_client_portal_data(uuid) to anon;
+grant execute on function insert_client_message(uuid, text) to anon;
+
+-- Agency <-> AI chat for managing a campaign directly (distinct from
+-- `messages`, which is now client in-app correspondence, not email). The
+-- agency asks
+-- questions or requests changes; the AI can reply with a suggestion and/or
+-- a proposed_action (same shape as messages.proposed_action: action_type
+-- one of update_daily_budget/pause_campaign/resume_campaign, plus
+-- daily_budget_usd and reason). action_status tracks whether a proposed
+-- action was applied or dismissed. No anon access at all — agency-only.
+create table if not exists campaign_chat_messages (
+  id uuid primary key default gen_random_uuid(),
+  campaign_id uuid not null references campaigns(id) on delete cascade,
+  role text not null check (role in ('user', 'assistant')),
+  content text not null,
+  proposed_action jsonb,
+  action_status text check (action_status in ('proposed', 'applied', 'dismissed')),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists campaign_chat_messages_campaign_id_idx on campaign_chat_messages(campaign_id);
+
 -- Single-row config table for the account-wide Google Ads API credentials
 -- (developer token, OAuth client id/secret/refresh token, MCC customer
 -- id). These used to be hardcoded directly into n8n workflow JSON files,
@@ -135,6 +210,7 @@ alter table campaign_metrics enable row level security;
 alter table recommendations enable row level security;
 alter table messages enable row level security;
 alter table google_ads_settings enable row level security;
+alter table campaign_chat_messages enable row level security;
 
 -- clients: anyone can create via the intake form — anon when submitted
 -- from the public /intake page, authenticated when the agency submits it
@@ -179,6 +255,8 @@ create policy "authenticated can update recommendations" on recommendations
 -- approving an AI draft before it's sent.
 create policy "authenticated can read messages" on messages
   for select to authenticated using (true);
+create policy "authenticated can insert messages" on messages
+  for insert to authenticated with check (true);
 create policy "authenticated can update messages" on messages
   for update to authenticated using (true) with check (true);
 
@@ -190,6 +268,14 @@ create policy "authenticated can update messages" on messages
 create policy "authenticated can read google_ads_settings" on google_ads_settings
   for select to authenticated using (true);
 create policy "authenticated can update google_ads_settings" on google_ads_settings
+  for update to authenticated using (true) with check (true);
+
+-- campaign_chat_messages: agency-only, no anon access at all.
+create policy "authenticated can read campaign_chat_messages" on campaign_chat_messages
+  for select to authenticated using (true);
+create policy "authenticated can insert campaign_chat_messages" on campaign_chat_messages
+  for insert to authenticated with check (true);
+create policy "authenticated can update campaign_chat_messages" on campaign_chat_messages
   for update to authenticated using (true) with check (true);
 
 -- Keep campaigns.updated_at current on every update.

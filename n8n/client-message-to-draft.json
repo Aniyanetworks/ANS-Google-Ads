@@ -1,0 +1,461 @@
+{
+  "name": "client-message-to-draft",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "client-message",
+        "options": {}
+      },
+      "id": "webhook-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        300
+      ],
+      "webhookId": "client-message",
+      "notes": "Called by ClientPortalPage.tsx right after it inserts a new inbound message via the insert_client_message RPC. Payload: { message_id }."
+    },
+    {
+      "parameters": {
+        "jsCode": "const id = $json.body.message_id;\nconst uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nif (typeof id !== 'string' || !uuidRe.test(id)) {\n  throw new Error('message_id missing or not a valid UUID: ' + JSON.stringify(id));\n}\nreturn [{ json: { message_id: id } }];\n"
+      },
+      "id": "validate-1",
+      "name": "Validate message_id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "messages",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $json.message_id }}"
+            }
+          ]
+        }
+      },
+      "id": "get-message-1",
+      "name": "Get message",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "clients",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $('Get message').item.json.client_id }}"
+            }
+          ]
+        }
+      },
+      "id": "get-client-1",
+      "name": "Get client",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        460,
+        220
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "campaigns",
+        "returnAll": false,
+        "limit": 1,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "client_id",
+              "keyValue": "={{ $('Get message').item.json.client_id }}"
+            }
+          ]
+        }
+      },
+      "id": "get-campaign-1",
+      "name": "Get campaign",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        460,
+        380
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "alwaysOutputData": true,
+      "notes": "A client with no campaign yet is a real, expected case."
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "campaign_metrics",
+        "returnAll": false,
+        "limit": 90,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "campaign_id",
+              "keyValue": "={{ $('Get campaign').item.json.id }}"
+            }
+          ]
+        }
+      },
+      "id": "get-metrics-1",
+      "name": "Get campaign metrics",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        680,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "recommendations",
+        "returnAll": false,
+        "limit": 20,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "campaign_id",
+              "keyValue": "={{ $('Get campaign').item.json.id }}"
+            },
+            {
+              "keyName": "status",
+              "keyValue": "open"
+            }
+          ]
+        }
+      },
+      "id": "get-recs-1",
+      "name": "Get open recommendations",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        900,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const message = $('Get message').item.json;\nconst client = $('Get client').item.json;\nconst campaignRows = $('Get campaign').all().map(i => i.json);\nconst campaign = campaignRows[0] || null;\nconst metricsRows = $('Get campaign metrics').all().map(i => i.json);\nconst recRows = $('Get open recommendations').all().map(i => i.json);\n\nconst totals = metricsRows.reduce((acc, m) => {\n  acc.cost += Number(m.cost || 0);\n  acc.conversions += Number(m.conversions || 0);\n  acc.conversionsValue += Number(m.conversions_value || 0);\n  return acc;\n}, { cost: 0, conversions: 0, conversionsValue: 0 });\n\nconst recsText = recRows.length\n  ? recRows.map(r => '- ' + r.type + ': $' + r.dollars_recoverable + ' recoverable').join('\\n')\n  : 'None currently open.';\n\nreturn [{\n  json: {\n    businessName: client.business_name,\n    campaignId: campaign ? campaign.id : null,\n    campaignName: campaign ? campaign.campaign_name : 'none yet',\n    campaignStatus: campaign ? campaign.status : 'n/a',\n    dailyBudgetUsd: campaign ? campaign.daily_budget_usd : null,\n    totalCost: totals.cost,\n    totalConversions: totals.conversions,\n    totalConversionsValue: totals.conversionsValue,\n    roas: totals.cost > 0 ? totals.conversionsValue / totals.cost : null,\n    recommendationsText: recsText,\n    clientMessage: message.body,\n  },\n}];\n"
+      },
+      "id": "build-context-1",
+      "name": "Build AI context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Client: {{ $json.businessName }}. Campaign: {{ $json.campaignName }} (status: {{ $json.campaignStatus }}, daily budget ${{ $json.dailyBudgetUsd || 'n/a' }}).\nPerformance to date: cost ${{ $json.totalCost }}, conversions {{ $json.totalConversions }}, conversion value ${{ $json.totalConversionsValue }}, ROAS {{ $json.roas || 'n/a' }}.\n\nOpen Google Ads recommendations:\n{{ $json.recommendationsText }}\n\nClient's message:\n{{ $json.clientMessage }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are drafting a reply on behalf of a Google Ads agency to a message a client sent through the agency's in-app client portal (not email). This draft will be reviewed and edited by a human before it's sent — do not promise anything you aren't instructed to, and do not claim a change has already been made; say a requested change is being reviewed, not that it's done.\n\nproposed_action must be null UNLESS the client is clearly asking for one of exactly these three changes, in which case set action_type to the matching value:\n- \"update_daily_budget\": client wants the daily budget raised/lowered/set to a specific amount. daily_budget_usd is required and must be a plain number. If they haven't given a specific number or clear enough direction to pick one, ask a clarifying question in the reply instead and leave proposed_action null.\n- \"pause_campaign\": client wants the campaign paused.\n- \"resume_campaign\": client wants a paused campaign resumed.\n\nFor update_daily_budget, daily_budget_usd is required. For pause_campaign/resume_campaign, set daily_budget_usd to null. Always include a short one-sentence reason. Anything outside these three action types (targeting, ad copy, general questions) gets proposed_action: null and a normal reply."
+        }
+      },
+      "id": "ai-agent-1",
+      "name": "Draft reply (AI Agent)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        1340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "value": "claude-sonnet-5"
+        },
+        "options": {}
+      },
+      "id": "anthropic-chat-model-1",
+      "name": "Anthropic Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1,
+      "position": [
+        1260,
+        500
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Anthropic account"
+        }
+      },
+      "notes": "Can reuse the same Anthropic credential as campaign-chat.json."
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"reply\": { \"type\": \"string\" },\n    \"proposed_action\": {\n      \"type\": [\"object\", \"null\"],\n      \"properties\": {\n        \"action_type\": {\n          \"type\": \"string\",\n          \"enum\": [\"update_daily_budget\", \"pause_campaign\", \"resume_campaign\"]\n        },\n        \"daily_budget_usd\": { \"type\": [\"number\", \"null\"] },\n        \"reason\": { \"type\": \"string\" }\n      },\n      \"required\": [\"action_type\", \"daily_budget_usd\", \"reason\"]\n    }\n  },\n  \"required\": [\"reply\", \"proposed_action\"]\n}"
+      },
+      "id": "output-parser-1",
+      "name": "Structured Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        1440,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "messages",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Validate message_id').item.json.message_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "campaign_id",
+              "fieldValue": "={{ $('Build AI context').item.json.campaignId }}"
+            },
+            {
+              "fieldId": "ai_draft_body",
+              "fieldValue": "={{ $json.output.reply }}"
+            },
+            {
+              "fieldId": "proposed_action",
+              "fieldValue": "={{ $json.output.proposed_action }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "drafted"
+            }
+          ]
+        }
+      },
+      "id": "save-draft-1",
+      "name": "Save draft to message",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Also backfills messages.campaign_id here since insert_client_message() (the RPC the portal page calls) doesn't set it — needed later if the agency approves a proposed_action, so apply-campaign-action.json's chain can find the right campaign."
+    },
+    {
+      "parameters": {
+        "text": "=New client message needs review — {{ $('Build AI context').item.json.businessName }}: /dashboard/clients/{{ $('Get message').item.json.client_id }}"
+      },
+      "id": "notify-1",
+      "name": "Notify: needs review",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1780,
+        300
+      ],
+      "notes": "Replace with your actual Slack/Email node."
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate message_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate message_id": {
+      "main": [
+        [
+          {
+            "node": "Get message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get message": {
+      "main": [
+        [
+          {
+            "node": "Get client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get client": {
+      "main": [
+        [
+          {
+            "node": "Get campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get campaign": {
+      "main": [
+        [
+          {
+            "node": "Get campaign metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get campaign metrics": {
+      "main": [
+        [
+          {
+            "node": "Get open recommendations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get open recommendations": {
+      "main": [
+        [
+          {
+            "node": "Build AI context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI context": {
+      "main": [
+        [
+          {
+            "node": "Draft reply (AI Agent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Draft reply (AI Agent)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Draft reply (AI Agent)",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Draft reply (AI Agent)": {
+      "main": [
+        [
+          {
+            "node": "Save draft to message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save draft to message": {
+      "main": [
+        [
+          {
+            "node": "Notify: needs review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

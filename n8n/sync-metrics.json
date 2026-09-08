@@ -12,30 +12,543 @@
           ]
         }
       },
-      "id": "schedule-trigger-1",
+      "id": "schedule-1",
       "name": "Schedule Trigger",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [240, 300]
+      "position": [
+        -400,
+        300
+      ],
+      "notes": "Fires once a day (default n8n Schedule Trigger UI defaults to midnight in the instance's timezone — adjust in the node if you want a specific hour)."
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "google_ads_settings",
+        "limit": 1,
+        "filterType": "none"
+      },
+      "id": "get-creds-1",
+      "name": "Get Google Ads credentials",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -180,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.INTERNAL_API_URL }}/sync-metrics",
-        "sendHeaders": true,
-        "headerParameters": {
+        "url": "https://oauth2.googleapis.com/token",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
           "parameters": [
-            { "name": "X-API-Key", "value": "={{ $env.INTERNAL_API_KEY }}" }
+            {
+              "name": "client_id",
+              "value": "={{ $('Get Google Ads credentials').item.json.client_id }}"
+            },
+            {
+              "name": "client_secret",
+              "value": "={{ $('Get Google Ads credentials').item.json.client_secret }}"
+            },
+            {
+              "name": "refresh_token",
+              "value": "={{ $('Get Google Ads credentials').item.json.refresh_token }}"
+            },
+            {
+              "name": "grant_type",
+              "value": "refresh_token"
+            }
           ]
         },
         "options": {}
       },
-      "id": "call-api-1",
-      "name": "Trigger sync",
+      "id": "refresh-token-1",
+      "name": "Refresh Google Ads token",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [460, 300],
-      "notes": "Calls code/api_server.py (see n8n/README.md). Needs INTERNAL_API_URL and INTERNAL_API_KEY set as n8n environment variables."
+      "position": [
+        40,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "campaigns",
+        "returnAll": true,
+        "filterType": "none"
+      },
+      "id": "get-all-campaigns-1",
+      "name": "Get all campaigns",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        260,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Unverified: returnAll + filterType 'none' for a multi-row table (only used for the single-row google_ads_settings table elsewhere this session)."
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst DIRECT_ACCESS_CUSTOMER_IDS = ['3534195221'];\nconst out = [];\nfor (const row of rows) {\n  if (!row.google_ads_customer_id || !row.google_ads_campaign_resource) continue;\n  const customerId = String(row.google_ads_customer_id).replace(/[^0-9]/g, '');\n  const googleCampaignId = row.google_ads_campaign_resource.split('/campaigns/')[1];\n  if (!googleCampaignId) continue;\n  out.push({\n    json: {\n      campaignRowId: row.id,\n      customerId,\n      googleCampaignId,\n      loginCustomerId: DIRECT_ACCESS_CUSTOMER_IDS.includes(customerId) ? '' : $('Get Google Ads credentials').first().json.mcc_customer_id,\n      campaignName: row.campaign_name,\n      status: row.status,\n      dailyBudgetUsd: row.daily_budget_usd,\n    },\n  });\n}\nreturn out;\n"
+      },
+      "id": "filter-1",
+      "name": "Filter buildable campaigns",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "notes": "Keeps only campaigns with both google_ads_customer_id and google_ads_campaign_resource set (i.e. actually built in Google Ads). One output item per valid campaign; the rest of this workflow processes each independently."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $json.customerId }}/googleAds:search",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Filter buildable campaigns').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Filter buildable campaigns').item.json.loginCustomerId }\n    : {}\n)) }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: `SELECT segments.date, metrics.cost_micros, metrics.conversions, metrics.conversions_value, metrics.impressions, metrics.clicks FROM campaign WHERE campaign.id = ${$json.googleCampaignId} AND segments.date DURING YESTERDAY` }) }}",
+        "options": {}
+      },
+      "id": "search-metrics-1",
+      "name": "Search campaign metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        700,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const campaign = $('Filter buildable campaigns').item.json;\nconst results = $json.results || [];\nconst row = results[0];\nconst fallbackDate = new Date(Date.now() - 86400000).toISOString().slice(0, 10);\nreturn [{\n  json: {\n    campaign_id: campaign.campaignRowId,\n    date: row ? row.segments.date : fallbackDate,\n    cost: row ? Number(row.metrics.costMicros || 0) / 1000000 : 0,\n    conversions: row ? Number(row.metrics.conversions || 0) : 0,\n    conversions_value: row ? Number(row.metrics.conversionsValue || 0) : 0,\n    impressions: row ? Number(row.metrics.impressions || 0) : 0,\n    clicks: row ? Number(row.metrics.clicks || 0) : 0,\n  },\n}];\n"
+      },
+      "id": "build-metrics-row-1",
+      "name": "Build metrics row",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        160
+      ],
+      "notes": "Zero spend yesterday is a valid, common case — Google returns no rows for it, so this falls back to a zero-valued row rather than skipping the day (keeps daily history gap-free for charts)."
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "tableId": "campaign_metrics",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "campaign_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.campaign_id }}"
+            },
+            {
+              "keyName": "date",
+              "condition": "eq",
+              "keyValue": "={{ $json.date }}"
+            }
+          ]
+        }
+      },
+      "id": "delete-metrics-row-1",
+      "name": "Delete existing metrics row",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1140,
+        160
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Delete-then-create instead of upsert, since the native Supabase node's upsert support is unverified. Clears yesterday's row (if this campaign was already synced today) before inserting a fresh one — makes re-runs idempotent. The 'delete' operation itself is unverified against your instance; if its Field Name/ID dropdowns don't resolve, same fix pattern as everywhere else — tell me what the UI shows."
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "campaign_metrics",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "campaign_id",
+              "fieldValue": "={{ $('Build metrics row').item.json.campaign_id }}"
+            },
+            {
+              "fieldId": "date",
+              "fieldValue": "={{ $('Build metrics row').item.json.date }}"
+            },
+            {
+              "fieldId": "cost",
+              "fieldValue": "={{ $('Build metrics row').item.json.cost }}"
+            },
+            {
+              "fieldId": "conversions",
+              "fieldValue": "={{ $('Build metrics row').item.json.conversions }}"
+            },
+            {
+              "fieldId": "conversions_value",
+              "fieldValue": "={{ $('Build metrics row').item.json.conversions_value }}"
+            },
+            {
+              "fieldId": "impressions",
+              "fieldValue": "={{ $('Build metrics row').item.json.impressions }}"
+            },
+            {
+              "fieldId": "clicks",
+              "fieldValue": "={{ $('Build metrics row').item.json.clicks }}"
+            }
+          ]
+        }
+      },
+      "id": "create-metrics-row-1",
+      "name": "Create metrics row",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1360,
+        160
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "recommendations",
+        "returnAll": false,
+        "limit": 20,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "campaign_id",
+              "keyValue": "={{ $('Filter buildable campaigns').item.json.campaignRowId }}"
+            },
+            {
+              "keyName": "status",
+              "keyValue": "open"
+            }
+          ]
+        }
+      },
+      "id": "get-fresh-recs-1",
+      "name": "Get fresh recommendations",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1580,
+        160
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "alwaysOutputData": true,
+      "notes": "Reads back what 'Create recommendation row' (the parallel branch below) just wrote. These two branches run concurrently with no explicit synchronization, so there's a small chance this reads slightly-stale recommendation data if the other branch hasn't finished yet — acceptable for a proactive nudge, not worth a Merge node's added complexity for this."
+    },
+    {
+      "parameters": {
+        "jsCode": "const campaign = $('Filter buildable campaigns').item.json;\nconst metricsRow = $('Build metrics row').item.json;\nconst recRows = $('Get fresh recommendations').all().map(i => i.json);\nconst roas = metricsRow.cost > 0 ? metricsRow.conversions_value / metricsRow.cost : null;\nconst recsText = recRows.length\n  ? recRows.map(r => '- ' + r.type + ': $' + r.dollars_recoverable + ' recoverable').join('\\n')\n  : 'None currently open.';\n\nreturn [{\n  json: {\n    campaignName: campaign.campaignName,\n    status: campaign.status,\n    dailyBudgetUsd: campaign.dailyBudgetUsd,\n    date: metricsRow.date,\n    cost: metricsRow.cost,\n    conversions: metricsRow.conversions,\n    conversionsValue: metricsRow.conversions_value,\n    roas,\n    recommendationsText: recsText,\n  },\n}];\n"
+      },
+      "id": "build-suggestion-context-1",
+      "name": "Build suggestion context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Campaign: {{ $json.campaignName }} (status: {{ $json.status }}, daily budget ${{ $json.dailyBudgetUsd }}).\nYesterday ({{ $json.date }}): cost ${{ $json.cost }}, conversions {{ $json.conversions }}, conversion value ${{ $json.conversionsValue }}, ROAS {{ $json.roas || 'n/a' }}.\n\nOpen Google Ads recommendations:\n{{ $json.recommendationsText }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are reviewing this Google Ads campaign's daily performance sync automatically, on behalf of an agency, with no human having asked a question. Decide whether there's a genuinely useful, specific, non-obvious suggestion worth proactively surfacing right now — a real Google Ads recommendation with meaningful dollar impact, a clear problem (e.g. real spend with zero conversions), or a budget that's obviously binding. Be conservative: set should_post to false unless something actually stands out. Do not post just to have something to say — a missed useful suggestion is far better than noise the agency starts ignoring.\n\nWhen should_post is true, proposed_action follows the same rules as elsewhere in this project: null UNLESS you're suggesting exactly one of update_daily_budget (daily_budget_usd required, a specific number), pause_campaign, or resume_campaign, with a one-sentence reason. Most suggestions will have proposed_action: null (e.g. flagging a recommendation the agency should look at manually in Google Ads) — only set an action when it's a clear, specific, agency-approvable change."
+        }
+      },
+      "id": "suggest-agent-1",
+      "name": "Suggest (AI Agent)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        2020,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "value": "claude-sonnet-5"
+        },
+        "options": {}
+      },
+      "id": "anthropic-chat-model-1",
+      "name": "Anthropic Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1,
+      "position": [
+        1940,
+        360
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Anthropic account"
+        }
+      },
+      "notes": "Can reuse the same Anthropic credential as campaign-chat.json / client-message-to-draft.json."
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"should_post\": { \"type\": \"boolean\" },\n    \"message\": { \"type\": \"string\" },\n    \"proposed_action\": {\n      \"type\": [\"object\", \"null\"],\n      \"properties\": {\n        \"action_type\": {\n          \"type\": \"string\",\n          \"enum\": [\"update_daily_budget\", \"pause_campaign\", \"resume_campaign\"]\n        },\n        \"daily_budget_usd\": { \"type\": [\"number\", \"null\"] },\n        \"reason\": { \"type\": \"string\" }\n      },\n      \"required\": [\"action_type\", \"daily_budget_usd\", \"reason\"]\n    }\n  },\n  \"required\": [\"should_post\", \"message\", \"proposed_action\"]\n}"
+      },
+      "id": "output-parser-1",
+      "name": "Structured Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        2120,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const output = $json.output;\nreturn [{\n  json: {\n    shouldPost: !!output.should_post,\n    message: output.message,\n    proposedAction: output.proposed_action || null,\n    actionStatus: output.proposed_action ? 'proposed' : null,\n  },\n}];\n"
+      },
+      "id": "prepare-suggestion-1",
+      "name": "Prepare suggestion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.shouldPost }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "should-post-1",
+      "name": "Should post?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2460,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "campaign_chat_messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "campaign_id",
+              "fieldValue": "={{ $('Filter buildable campaigns').item.json.campaignRowId }}"
+            },
+            {
+              "fieldId": "role",
+              "fieldValue": "assistant"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $json.message }}"
+            },
+            {
+              "fieldId": "proposed_action",
+              "fieldValue": "={{ $json.proposedAction }}"
+            },
+            {
+              "fieldId": "action_status",
+              "fieldValue": "={{ $json.actionStatus }}"
+            }
+          ]
+        }
+      },
+      "id": "insert-suggestion-1",
+      "name": "Insert proactive suggestion",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2680,
+        160
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Posts into the same campaign_chat_messages table CampaignChat.tsx reads — shows up in the Campaign Assistant tab exactly like a reply to a question, just unprompted. Confirm & Apply / Dismiss buttons work identically for these."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Filter buildable campaigns').item.json.customerId }}/googleAds:search",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Filter buildable campaigns').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Filter buildable campaigns').item.json.loginCustomerId }\n    : {}\n)) }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: `SELECT recommendation.resource_name, recommendation.type, recommendation.campaign, recommendation.impact FROM recommendation WHERE recommendation.campaign = 'customers/${$('Filter buildable campaigns').item.json.customerId}/campaigns/${$('Filter buildable campaigns').item.json.googleCampaignId}'` }) }}",
+        "options": {}
+      },
+      "id": "search-recs-1",
+      "name": "Search recommendations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        700,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "tableId": "recommendations",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "campaign_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Filter buildable campaigns').item.json.campaignRowId }}"
+            },
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "open"
+            }
+          ]
+        }
+      },
+      "id": "delete-open-recs-1",
+      "name": "Delete existing open recommendations",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        920,
+        440
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Clears previously-open recommendations for this campaign before inserting the fresh set — correct behavior, not just idempotency: a recommendation Google Ads no longer surfaces should stop showing as 'open' here too. Does NOT touch rows already marked applied/dismissed."
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = $json.results || [];\nconst campaignRowId = $('Filter buildable campaigns').item.json.campaignRowId;\nreturn results.map(r => {\n  const rec = r.recommendation;\n  const base = rec.impact.baseMetrics;\n  const potential = rec.impact.potentialMetrics;\n  const baseCost = Number(base.costMicros || 0) / 1000000;\n  const potentialCost = Number(potential.costMicros || 0) / 1000000;\n  const valueGain = Number(potential.conversionsValue || 0) - Number(base.conversionsValue || 0);\n  const costSavings = baseCost - potentialCost;\n  const dollarsRecoverable = valueGain > 0 ? valueGain : Math.max(costSavings, 0);\n  return {\n    json: {\n      campaign_id: campaignRowId,\n      type: rec.type,\n      dollars_recoverable: dollarsRecoverable,\n      resource_name: rec.resourceName,\n      status: 'open',\n    },\n  };\n});\n"
+      },
+      "id": "build-rec-items-1",
+      "name": "Build recommendation items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "recommendations",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "campaign_id",
+              "fieldValue": "={{ $json.campaign_id }}"
+            },
+            {
+              "fieldId": "type",
+              "fieldValue": "={{ $json.type }}"
+            },
+            {
+              "fieldId": "dollars_recoverable",
+              "fieldValue": "={{ $json.dollars_recoverable }}"
+            },
+            {
+              "fieldId": "resource_name",
+              "fieldValue": "={{ $json.resource_name }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "open"
+            }
+          ]
+        }
+      },
+      "id": "create-rec-row-1",
+      "name": "Create recommendation row",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1360,
+        440
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Runs once per recommendation item from 'Build recommendation items' (n8n executes a node once per input item by default) — no bulk/array insert needed."
     }
   ],
   "connections": {
@@ -43,7 +556,211 @@
       "main": [
         [
           {
-            "node": "Trigger sync",
+            "node": "Get Google Ads credentials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Google Ads credentials": {
+      "main": [
+        [
+          {
+            "node": "Refresh Google Ads token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refresh Google Ads token": {
+      "main": [
+        [
+          {
+            "node": "Get all campaigns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get all campaigns": {
+      "main": [
+        [
+          {
+            "node": "Filter buildable campaigns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter buildable campaigns": {
+      "main": [
+        [
+          {
+            "node": "Search campaign metrics",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search recommendations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search campaign metrics": {
+      "main": [
+        [
+          {
+            "node": "Build metrics row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build metrics row": {
+      "main": [
+        [
+          {
+            "node": "Delete existing metrics row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete existing metrics row": {
+      "main": [
+        [
+          {
+            "node": "Create metrics row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create metrics row": {
+      "main": [
+        [
+          {
+            "node": "Get fresh recommendations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get fresh recommendations": {
+      "main": [
+        [
+          {
+            "node": "Build suggestion context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build suggestion context": {
+      "main": [
+        [
+          {
+            "node": "Suggest (AI Agent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Suggest (AI Agent)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Suggest (AI Agent)",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suggest (AI Agent)": {
+      "main": [
+        [
+          {
+            "node": "Prepare suggestion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare suggestion": {
+      "main": [
+        [
+          {
+            "node": "Should post?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Should post?": {
+      "main": [
+        [
+          {
+            "node": "Insert proactive suggestion",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Search recommendations": {
+      "main": [
+        [
+          {
+            "node": "Delete existing open recommendations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete existing open recommendations": {
+      "main": [
+        [
+          {
+            "node": "Build recommendation items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build recommendation items": {
+      "main": [
+        [
+          {
+            "node": "Create recommendation row",
             "type": "main",
             "index": 0
           }

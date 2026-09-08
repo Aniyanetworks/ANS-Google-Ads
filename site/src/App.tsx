@@ -6,6 +6,7 @@ import DashboardPage from "./pages/DashboardPage";
 import ClientDetailPage from "./pages/ClientDetailPage";
 import AccountPage from "./pages/AccountPage";
 import SettingsPage from "./pages/SettingsPage";
+import ClientPortalPage from "./pages/ClientPortalPage";
 
 export default function App() {
   return (
@@ -14,6 +15,7 @@ export default function App() {
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/intake" element={<IntakePage />} />
+        <Route path="/client/:clientId" element={<ClientPortalPage />} />
         <Route
           path="/dashboard"
           element={

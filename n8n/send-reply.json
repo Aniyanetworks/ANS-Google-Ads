@@ -12,7 +12,10 @@
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [200, 300],
+      "position": [
+        200,
+        300
+      ],
       "webhookId": "send-reply"
     },
     {
@@ -23,38 +26,57 @@
       "name": "Validate message_id",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [420, 300],
+      "position": [
+        420,
+        300
+      ],
       "notes": "Rejects anything that isn't UUID-shaped before it reaches a shell command in the Apply proposed action step."
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "={{ $env.SUPABASE_URL }}/rest/v1/messages?id=eq.{{ $json.message_id }}&select=*",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
-            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" }
+        "operation": "get",
+        "tableId": "messages",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $json.message_id }}"
+            }
           ]
-        },
-        "options": {}
+        }
       },
       "id": "get-message-1",
       "name": "Get message",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [640, 300],
-      "notes": "Needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY available to n8n as environment variables (same as the other workflows)."
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        640,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Native Supabase node, same pattern as build-campaign.json's 'Get campaign'/'Get client' nodes — plain-string keyName/tableId, proven working against this instance. Replaces the earlier $env-based HTTP call, since $env access is blocked here."
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "conditions": [
             {
               "leftValue": "={{ $json.proposed_action }}",
               "rightValue": "",
-              "operator": { "type": "object", "operation": "notEmpty" }
+              "operator": {
+                "type": "object",
+                "operation": "notEmpty"
+              }
             }
           ],
           "combinator": "and"
@@ -65,99 +87,350 @@
       "name": "Has proposed_action?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [860, 300]
+      "position": [
+        860,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "campaigns",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $('Get message').item.json.campaign_id }}"
+            }
+          ]
+        }
+      },
+      "id": "get-campaign-for-action-1",
+      "name": "Get campaign for action",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1080,
+        160
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Only runs on the 'has proposed_action' branch. Looks up the campaign this message is linked to (messages.campaign_id, set by client-email-to-draft.json) so we know which Google Ads resources to mutate."
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "google_ads_settings",
+        "limit": 1,
+        "filterType": "none"
+      },
+      "id": "get-ads-creds-for-action-1",
+      "name": "Get Google Ads credentials",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1300,
+        160
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.INTERNAL_API_URL }}/apply-action",
-        "sendHeaders": true,
-        "headerParameters": {
+        "url": "https://oauth2.googleapis.com/token",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
           "parameters": [
-            { "name": "X-API-Key", "value": "={{ $env.INTERNAL_API_KEY }}" },
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "client_id",
+              "value": "={{ $('Get Google Ads credentials').item.json.client_id }}"
+            },
+            {
+              "name": "client_secret",
+              "value": "={{ $('Get Google Ads credentials').item.json.client_secret }}"
+            },
+            {
+              "name": "refresh_token",
+              "value": "={{ $('Get Google Ads credentials').item.json.refresh_token }}"
+            },
+            {
+              "name": "grant_type",
+              "value": "refresh_token"
+            }
           ]
         },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ message_id: $('Validate message_id').item.json.message_id }) }}",
         "options": {}
       },
-      "id": "apply-action-1",
-      "name": "Apply proposed action",
+      "id": "refresh-token-for-action-1",
+      "name": "Refresh Google Ads token (action)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1080, 220],
-      "notes": "Calls code/api_server.py's /apply-action endpoint, which currently just returns 501 Not Implemented — the actual dispatch logic (code/apply_action.py) is deliberately deferred until we've seen a few real proposed_action shapes from the AI drafting workflow, so it matches reality instead of a guess. This branch will fail until that's built; build_client_campaign.py's logic is a template for how to add it once ready."
+      "position": [
+        1520,
+        160
+      ],
+      "notes": "Same pattern as build-campaign.json — explicit OAuth2 refresh call rather than an n8n Google OAuth2 credential."
     },
     {
       "parameters": {
-        "resource": "message",
-        "operation": "send",
-        "sendTo": "={{ $('Get message').item.json.from_email }}",
-        "subject": "=Re: {{ $('Get message').item.json.subject || 'Your message' }}",
-        "emailType": "text",
-        "message": "={{ $('Get message').item.json.ai_draft_body }}",
+        "jsCode": "const msg = $('Get message').item.json;\nconst campaign = $('Get campaign for action').item.json;\nif (!campaign || !campaign.id) {\n  throw new Error('No campaign linked to this message (messages.campaign_id is empty) — cannot apply the proposed action.');\n}\nconst rawCustomerId = campaign.google_ads_customer_id;\nif (!rawCustomerId) {\n  throw new Error('This campaign has no google_ads_customer_id set.');\n}\nconst customerId = String(rawCustomerId).replace(/[^0-9]/g, '');\n\n// Same direct-access exception as build-campaign.json's Prepare context.\nconst DIRECT_ACCESS_CUSTOMER_IDS = ['3534195221'];\nconst mccCustomerId = $('Get Google Ads credentials').item.json.mcc_customer_id;\nconst loginCustomerId = DIRECT_ACCESS_CUSTOMER_IDS.includes(customerId) ? '' : mccCustomerId;\n\nconst action = msg.proposed_action;\nif (!action || !action.action_type) {\n  throw new Error('No proposed_action on this message.');\n}\n\nlet urlSuffix, body;\n\nif (action.action_type === 'update_daily_budget') {\n  if (!campaign.google_ads_budget_resource) {\n    throw new Error('This campaign has no google_ads_budget_resource on file (it was likely built before that field was added) — update it manually in Supabase or rebuild the campaign before this action type can be applied.');\n  }\n  if (typeof action.daily_budget_usd !== 'number') {\n    throw new Error('proposed_action.daily_budget_usd is missing or not a number.');\n  }\n  urlSuffix = 'campaignBudgets:mutate';\n  body = {\n    operations: [{\n      update: {\n        resourceName: campaign.google_ads_budget_resource,\n        amountMicros: String(Math.round(action.daily_budget_usd * 1000000)),\n      },\n      updateMask: 'amountMicros',\n    }],\n  };\n} else if (action.action_type === 'pause_campaign' || action.action_type === 'resume_campaign') {\n  if (!campaign.google_ads_campaign_resource) {\n    throw new Error('This campaign has no google_ads_campaign_resource on file.');\n  }\n  urlSuffix = 'campaigns:mutate';\n  body = {\n    operations: [{\n      update: {\n        resourceName: campaign.google_ads_campaign_resource,\n        status: action.action_type === 'pause_campaign' ? 'PAUSED' : 'ENABLED',\n      },\n      updateMask: 'status',\n    }],\n  };\n} else {\n  throw new Error('Unknown proposed_action.action_type: ' + action.action_type);\n}\n\nreturn [{ json: { customerId, loginCustomerId, urlSuffix, body } }];\n"
+      },
+      "id": "build-action-body-1",
+      "name": "Build campaign action body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1740,
+        160
+      ],
+      "notes": "Maps proposed_action.action_type to the right Google Ads mutate call. Only 3 action types exist (matches the tightened structured-output schema in client-email-to-draft.json): update_daily_budget, pause_campaign, resume_campaign."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $json.customerId }}/{{ $json.urlSuffix }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token (action)').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $json.loginCustomerId\n    ? { \"login-customer-id\": $json.loginCustomerId }\n    : {}\n)) }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
         "options": {}
       },
-      "id": "send-email-1",
-      "name": "Send reply email",
-      "type": "n8n-nodes-base.gmail",
-      "typeVersion": 2.1,
-      "position": [1300, 300],
-      "credentials": {
-        "gmailOAuth2": {
-          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
-          "name": "Gmail account"
+      "id": "apply-campaign-change-1",
+      "name": "Apply campaign change",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1960,
+        160
+      ],
+      "notes": "Actually calls the Google Ads API to apply the approved change. Same jsonHeaders/JSON.stringify pattern proven in build-campaign.json."
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "client_id",
+              "fieldValue": "={{ $('Get message').item.json.client_id }}"
+            },
+            {
+              "fieldId": "campaign_id",
+              "fieldValue": "={{ $('Get message').item.json.campaign_id }}"
+            },
+            {
+              "fieldId": "direction",
+              "fieldValue": "outbound"
+            },
+            {
+              "fieldId": "channel",
+              "fieldValue": "in_app"
+            },
+            {
+              "fieldId": "body",
+              "fieldValue": "={{ $('Get message').item.json.ai_draft_body }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "sent"
+            },
+            {
+              "fieldId": "sent_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            }
+          ]
         }
       },
-      "notes": "After import, connect this node to the same Gmail account used by client-email-to-draft's trigger (Settings > Credentials > Gmail OAuth2). Sends from whichever account the credential is authorized for — no separate 'from' field needed like SMTP had."
+      "id": "insert-outbound-1",
+      "name": "Insert outbound message",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1300,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Replaces the old Gmail 'Send reply email' node — no more email. The approved reply becomes a new outbound row in `messages`, which the client sees on their next portal load (ClientPortalPage.tsx)."
     },
     {
       "parameters": {
-        "method": "PATCH",
-        "url": "={{ $env.SUPABASE_URL }}/rest/v1/messages?id=eq.{{ $('Validate message_id').item.json.message_id }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
-            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
-            { "name": "Content-Type", "value": "application/json" }
+        "operation": "update",
+        "tableId": "messages",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Validate message_id').item.json.message_id }}"
+            }
           ]
         },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ status: 'sent', sent_at: new Date().toISOString() }) }}",
-        "options": {}
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "sent"
+            },
+            {
+              "fieldId": "sent_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            }
+          ]
+        }
       },
       "id": "mark-sent-1",
-      "name": "Mark message sent",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1520, 300]
+      "name": "Mark inbound message replied",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Marks the ORIGINAL inbound row handled (status='sent') so MessageThread.tsx stops showing its draft-editing box. The actual reply text now lives in the new outbound row from 'Insert outbound message', not on this row."
     }
   ],
   "connections": {
     "Webhook": {
-      "main": [[{ "node": "Validate message_id", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Validate message_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Validate message_id": {
-      "main": [[{ "node": "Get message", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Get message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Get message": {
-      "main": [[{ "node": "Has proposed_action?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Has proposed_action?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Has proposed_action?": {
       "main": [
-        [{ "node": "Apply proposed action", "type": "main", "index": 0 }],
-        [{ "node": "Send reply email", "type": "main", "index": 0 }]
+        [
+          {
+            "node": "Get campaign for action",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Insert outbound message",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
-    "Apply proposed action": {
-      "main": [[{ "node": "Send reply email", "type": "main", "index": 0 }]]
+    "Get campaign for action": {
+      "main": [
+        [
+          {
+            "node": "Get Google Ads credentials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
-    "Send reply email": {
-      "main": [[{ "node": "Mark message sent", "type": "main", "index": 0 }]]
+    "Get Google Ads credentials": {
+      "main": [
+        [
+          {
+            "node": "Refresh Google Ads token (action)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refresh Google Ads token (action)": {
+      "main": [
+        [
+          {
+            "node": "Build campaign action body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build campaign action body": {
+      "main": [
+        [
+          {
+            "node": "Apply campaign change",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply campaign change": {
+      "main": [
+        [
+          {
+            "node": "Insert outbound message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert outbound message": {
+      "main": [
+        [
+          {
+            "node": "Mark inbound message replied",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "pinData": {},

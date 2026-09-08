@@ -1,0 +1,490 @@
+{
+  "name": "campaign-chat",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "campaign-chat",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        300
+      ],
+      "webhookId": "campaign-chat"
+    },
+    {
+      "parameters": {
+        "jsCode": "const campaignId = $json.body.campaign_id;\nconst message = $json.body.message;\nconst uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nif (typeof campaignId !== 'string' || !uuidRe.test(campaignId)) {\n  throw new Error('campaign_id missing or not a valid UUID: ' + JSON.stringify(campaignId));\n}\nif (typeof message !== 'string' || !message.trim()) {\n  throw new Error('message missing or empty');\n}\nreturn [{ json: { campaign_id: campaignId, message: message.trim() } }];\n"
+      },
+      "id": "validate-1",
+      "name": "Validate input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "campaign_chat_messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "campaign_id",
+              "fieldValue": "={{ $json.campaign_id }}"
+            },
+            {
+              "fieldId": "role",
+              "fieldValue": "user"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $json.message }}"
+            }
+          ]
+        }
+      },
+      "id": "insert-user-msg-1",
+      "name": "Insert user message",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Native Supabase node, 'create' operation — same unverified caveat as client-email-to-draft.json's insert node."
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "campaigns",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $('Validate input').item.json.campaign_id }}"
+            }
+          ]
+        }
+      },
+      "id": "get-campaign-1",
+      "name": "Get campaign",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "campaign_metrics",
+        "returnAll": false,
+        "limit": 90,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "campaign_id",
+              "keyValue": "={{ $('Validate input').item.json.campaign_id }}"
+            }
+          ]
+        }
+      },
+      "id": "get-metrics-1",
+      "name": "Get campaign metrics",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        680,
+        220
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "alwaysOutputData": true,
+      "notes": "A brand-new campaign with no synced metrics yet is expected — alwaysOutputData avoids halting the workflow on zero rows."
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "recommendations",
+        "returnAll": false,
+        "limit": 20,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "campaign_id",
+              "keyValue": "={{ $('Validate input').item.json.campaign_id }}"
+            },
+            {
+              "keyName": "status",
+              "keyValue": "open"
+            }
+          ]
+        }
+      },
+      "id": "get-recs-1",
+      "name": "Get open recommendations",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        680,
+        380
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "alwaysOutputData": true,
+      "notes": "matchType/multi-condition filters unverified against your instance — if this errors, check the node's own error against its actual current parameters."
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "campaign_chat_messages",
+        "returnAll": false,
+        "limit": 50,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "campaign_id",
+              "keyValue": "={{ $('Validate input').item.json.campaign_id }}"
+            }
+          ]
+        }
+      },
+      "id": "get-history-1",
+      "name": "Get recent chat history",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        680,
+        540
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "alwaysOutputData": true,
+      "notes": "Includes the just-inserted user message too — that's fine, 'Build AI context' appends the current message separately from historyText."
+    },
+    {
+      "parameters": {
+        "jsCode": "const campaign = $('Get campaign').item.json;\nconst metricsRows = $('Get campaign metrics').all().map(i => i.json);\nconst recRows = $('Get open recommendations').all().map(i => i.json);\nconst historyRows = $('Get recent chat history').all().map(i => i.json)\n  .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))\n  .slice(-20);\n\nconst totals = metricsRows.reduce((acc, m) => {\n  acc.cost += Number(m.cost || 0);\n  acc.conversions += Number(m.conversions || 0);\n  acc.conversionsValue += Number(m.conversions_value || 0);\n  return acc;\n}, { cost: 0, conversions: 0, conversionsValue: 0 });\n\nconst historyText = historyRows.length\n  ? historyRows.map(h => (h.role === 'user' ? 'Agency' : 'Assistant') + ': ' + h.content).join('\\n')\n  : '(no prior messages)';\n\nconst recsText = recRows.length\n  ? recRows.map(r => '- ' + r.type + ': $' + r.dollars_recoverable + ' recoverable').join('\\n')\n  : 'None currently open.';\n\nreturn [{\n  json: {\n    campaignName: campaign.campaign_name,\n    status: campaign.status,\n    dailyBudgetUsd: campaign.daily_budget_usd,\n    totalCost: totals.cost,\n    totalConversions: totals.conversions,\n    totalConversionsValue: totals.conversionsValue,\n    roas: totals.cost > 0 ? totals.conversionsValue / totals.cost : null,\n    recommendationsText: recsText,\n    historyText,\n    userMessage: $('Validate input').item.json.message,\n  },\n}];\n"
+      },
+      "id": "build-context-1",
+      "name": "Build AI context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Campaign: {{ $json.campaignName }} (status: {{ $json.status }}, daily budget ${{ $json.dailyBudgetUsd }}).\nPerformance to date: cost ${{ $json.totalCost }}, conversions {{ $json.totalConversions }}, conversion value ${{ $json.totalConversionsValue }}, ROAS {{ $json.roas || 'n/a' }}.\n\nOpen Google Ads recommendations:\n{{ $json.recommendationsText }}\n\nRecent conversation:\n{{ $json.historyText }}\n\nAgency's new message:\n{{ $json.userMessage }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are an AI assistant helping a Google Ads agency manage this specific campaign directly, inside their internal dashboard. You are talking to the agency's own staff, not the end client — be direct and technical, not a customer-service tone. Use the performance data and open recommendations given to you to answer questions and give concrete, specific suggestions; cite the real numbers provided, never invent data you weren't given.\n\nproposed_action must be null UNLESS the agency is clearly asking for one of exactly these three changes, in which case set action_type to the matching value:\n- \"update_daily_budget\": raise/lower/set the daily budget to a specific dollar amount. daily_budget_usd is required and must be a plain number. If they haven't given a specific number or clear enough direction to pick one, ask a clarifying question in the reply instead and leave proposed_action null.\n- \"pause_campaign\": pause the campaign.\n- \"resume_campaign\": resume a paused campaign.\n\nFor update_daily_budget, daily_budget_usd is required. For pause_campaign/resume_campaign, set daily_budget_usd to null. Always include a short one-sentence reason. Never claim a change has already been made — say it's ready to apply and awaiting confirmation. Anything outside these three action types (targeting, ad copy, general questions) gets proposed_action: null and a normal answer."
+        }
+      },
+      "id": "ai-agent-1",
+      "name": "Chat (AI Agent)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "value": "claude-sonnet-5"
+        },
+        "options": {}
+      },
+      "id": "anthropic-chat-model-1",
+      "name": "Anthropic Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        500
+      ],
+      "credentials": {
+        "anthropicApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Anthropic account"
+        }
+      },
+      "notes": "After import, set this node's credential to your Anthropic API key (can reuse the same one as client-email-to-draft.json)."
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"reply\": { \"type\": \"string\" },\n    \"proposed_action\": {\n      \"type\": [\"object\", \"null\"],\n      \"properties\": {\n        \"action_type\": {\n          \"type\": \"string\",\n          \"enum\": [\"update_daily_budget\", \"pause_campaign\", \"resume_campaign\"]\n        },\n        \"daily_budget_usd\": { \"type\": [\"number\", \"null\"] },\n        \"reason\": { \"type\": \"string\" }\n      },\n      \"required\": [\"action_type\", \"daily_budget_usd\", \"reason\"]\n    }\n  },\n  \"required\": [\"reply\", \"proposed_action\"]\n}"
+      },
+      "id": "output-parser-1",
+      "name": "Structured Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [
+        1220,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const output = $json.output;\nreturn [{\n  json: {\n    content: output.reply,\n    proposedAction: output.proposed_action || null,\n    actionStatus: output.proposed_action ? 'proposed' : null,\n  },\n}];\n"
+      },
+      "id": "prepare-assistant-1",
+      "name": "Prepare assistant message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "campaign_chat_messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "campaign_id",
+              "fieldValue": "={{ $('Validate input').item.json.campaign_id }}"
+            },
+            {
+              "fieldId": "role",
+              "fieldValue": "assistant"
+            },
+            {
+              "fieldId": "content",
+              "fieldValue": "={{ $json.content }}"
+            },
+            {
+              "fieldId": "proposed_action",
+              "fieldValue": "={{ $json.proposedAction }}"
+            },
+            {
+              "fieldId": "action_status",
+              "fieldValue": "={{ $json.actionStatus }}"
+            }
+          ]
+        }
+      },
+      "id": "insert-assistant-msg-1",
+      "name": "Insert assistant message",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ id: $json.id, content: $json.content, proposed_action: $json.proposed_action, action_status: $json.action_status }) }}"
+      },
+      "id": "respond-1",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1780,
+        300
+      ],
+      "notes": "Returns the assistant's turn synchronously so the frontend can render it without a separate reload. Field names on $json here are a best guess at what the Supabase 'create' operation returns — if this comes back malformed, check what 'Insert assistant message' actually output and I'll fix the expression."
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate input": {
+      "main": [
+        [
+          {
+            "node": "Insert user message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert user message": {
+      "main": [
+        [
+          {
+            "node": "Get campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get campaign": {
+      "main": [
+        [
+          {
+            "node": "Get campaign metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get campaign metrics": {
+      "main": [
+        [
+          {
+            "node": "Get open recommendations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get open recommendations": {
+      "main": [
+        [
+          {
+            "node": "Get recent chat history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get recent chat history": {
+      "main": [
+        [
+          {
+            "node": "Build AI context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI context": {
+      "main": [
+        [
+          {
+            "node": "Chat (AI Agent)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anthropic Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Chat (AI Agent)",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Chat (AI Agent)",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chat (AI Agent)": {
+      "main": [
+        [
+          {
+            "node": "Prepare assistant message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare assistant message": {
+      "main": [
+        [
+          {
+            "node": "Insert assistant message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert assistant message": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

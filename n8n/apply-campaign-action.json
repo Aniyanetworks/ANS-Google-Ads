@@ -1,0 +1,304 @@
+{
+  "name": "apply-campaign-action",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "apply-campaign-action",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        300
+      ],
+      "webhookId": "apply-campaign-action"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $json.body || {};\nconst uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nif (typeof b.campaign_id !== 'string' || !uuidRe.test(b.campaign_id)) {\n  throw new Error('campaign_id missing or not a valid UUID: ' + JSON.stringify(b.campaign_id));\n}\nif (typeof b.chat_message_id !== 'string' || !uuidRe.test(b.chat_message_id)) {\n  throw new Error('chat_message_id missing or not a valid UUID: ' + JSON.stringify(b.chat_message_id));\n}\nif (!b.proposed_action || typeof b.proposed_action !== 'object' || !b.proposed_action.action_type) {\n  throw new Error('proposed_action missing or malformed: ' + JSON.stringify(b.proposed_action));\n}\nreturn [{ json: { campaign_id: b.campaign_id, chat_message_id: b.chat_message_id, proposed_action: b.proposed_action } }];\n"
+      },
+      "id": "validate-1",
+      "name": "Validate input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        300
+      ],
+      "notes": "Called by CampaignChat.tsx's Confirm button, payload { campaign_id, chat_message_id, proposed_action }."
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "campaigns",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $('Validate input').item.json.campaign_id }}"
+            }
+          ]
+        }
+      },
+      "id": "get-campaign-1",
+      "name": "Get campaign",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "google_ads_settings",
+        "limit": 1,
+        "filterType": "none"
+      },
+      "id": "get-creds-1",
+      "name": "Get Google Ads credentials",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://oauth2.googleapis.com/token",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "client_id",
+              "value": "={{ $('Get Google Ads credentials').item.json.client_id }}"
+            },
+            {
+              "name": "client_secret",
+              "value": "={{ $('Get Google Ads credentials').item.json.client_secret }}"
+            },
+            {
+              "name": "refresh_token",
+              "value": "={{ $('Get Google Ads credentials').item.json.refresh_token }}"
+            },
+            {
+              "name": "grant_type",
+              "value": "refresh_token"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "refresh-token-1",
+      "name": "Refresh Google Ads token",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const campaign = $('Get campaign').item.json;\nif (!campaign || !campaign.id) {\n  throw new Error('Campaign not found.');\n}\nconst rawCustomerId = campaign.google_ads_customer_id;\nif (!rawCustomerId) {\n  throw new Error('This campaign has no google_ads_customer_id set.');\n}\nconst customerId = String(rawCustomerId).replace(/[^0-9]/g, '');\n\nconst DIRECT_ACCESS_CUSTOMER_IDS = ['3534195221'];\nconst mccCustomerId = $('Get Google Ads credentials').item.json.mcc_customer_id;\nconst loginCustomerId = DIRECT_ACCESS_CUSTOMER_IDS.includes(customerId) ? '' : mccCustomerId;\n\nconst action = $('Validate input').item.json.proposed_action;\n\nlet urlSuffix, body;\n\nif (action.action_type === 'update_daily_budget') {\n  if (!campaign.google_ads_budget_resource) {\n    throw new Error('This campaign has no google_ads_budget_resource on file (it was likely built before that field was added) \\u2014 update it manually in Supabase or rebuild the campaign before this action type can be applied.');\n  }\n  if (typeof action.daily_budget_usd !== 'number') {\n    throw new Error('proposed_action.daily_budget_usd is missing or not a number.');\n  }\n  urlSuffix = 'campaignBudgets:mutate';\n  body = {\n    operations: [{\n      update: {\n        resourceName: campaign.google_ads_budget_resource,\n        amountMicros: String(Math.round(action.daily_budget_usd * 1000000)),\n      },\n      updateMask: 'amountMicros',\n    }],\n  };\n} else if (action.action_type === 'pause_campaign' || action.action_type === 'resume_campaign') {\n  if (!campaign.google_ads_campaign_resource) {\n    throw new Error('This campaign has no google_ads_campaign_resource on file.');\n  }\n  urlSuffix = 'campaigns:mutate';\n  body = {\n    operations: [{\n      update: {\n        resourceName: campaign.google_ads_campaign_resource,\n        status: action.action_type === 'pause_campaign' ? 'PAUSED' : 'ENABLED',\n      },\n      updateMask: 'status',\n    }],\n  };\n} else {\n  throw new Error('Unknown proposed_action.action_type: ' + action.action_type);\n}\n\nreturn [{ json: { customerId, loginCustomerId, urlSuffix, body } }];\n"
+      },
+      "id": "build-body-1",
+      "name": "Build campaign action body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ],
+      "notes": "Same logic as send-reply.json's 'Build campaign action body' node, ported to read from Validate input's proposed_action instead of a messages row lookup."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $json.customerId }}/{{ $json.urlSuffix }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $json.loginCustomerId\n    ? { \"login-customer-id\": $json.loginCustomerId }\n    : {}\n)) }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {}
+      },
+      "id": "apply-change-1",
+      "name": "Apply campaign change",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "campaign_chat_messages",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Validate input').item.json.chat_message_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "action_status",
+              "fieldValue": "applied"
+            }
+          ]
+        }
+      },
+      "id": "mark-applied-1",
+      "name": "Mark chat message applied",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ ok: true }) }}"
+      },
+      "id": "respond-1",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1560,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate input": {
+      "main": [
+        [
+          {
+            "node": "Get campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get campaign": {
+      "main": [
+        [
+          {
+            "node": "Get Google Ads credentials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Google Ads credentials": {
+      "main": [
+        [
+          {
+            "node": "Refresh Google Ads token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refresh Google Ads token": {
+      "main": [
+        [
+          {
+            "node": "Build campaign action body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build campaign action body": {
+      "main": [
+        [
+          {
+            "node": "Apply campaign change",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply campaign change": {
+      "main": [
+        [
+          {
+            "node": "Mark chat message applied",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark chat message applied": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

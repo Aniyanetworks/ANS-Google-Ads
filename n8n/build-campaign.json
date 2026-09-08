@@ -506,6 +506,10 @@
                 "cachedResultName": "google_ads_ad_group_resource"
               },
               "fieldValue": "={{ $('Create ad group').item.json.results[0].resourceName }}"
+            },
+            {
+              "fieldId": "google_ads_budget_resource",
+              "fieldValue": "={{ $('Create budget').item.json.results[0].resourceName }}"
             }
           ]
         }
