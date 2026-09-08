@@ -1,23 +1,29 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
+import IntakeModal from "../components/IntakeModal";
 
 type ClientRow = {
   id: string;
   name: string;
   business_name: string;
   campaignCount: number;
+  primaryCampaignId: string | null;
   status: string | null;
   cost: number;
   conversionsValue: number;
   roas: number | null;
 };
 
+const RETRYABLE_STATUSES = ["pending", "building", "error"];
+
 const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
 export default function DashboardPage() {
   const [clients, setClients] = useState<ClientRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showIntake, setShowIntake] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     async function load() {
@@ -80,6 +86,7 @@ export default function DashboardPage() {
           name: client.name,
           business_name: client.business_name,
           campaignCount: campaigns.length,
+          primaryCampaignId: campaigns[0]?.id ?? null,
           status: campaigns[0]?.status ?? null,
           cost: totals.cost,
           conversionsValue: totals.value,
@@ -91,7 +98,50 @@ export default function DashboardPage() {
     }
 
     load();
-  }, []);
+  }, [refreshKey]);
+
+  async function handleDelete(client: ClientRow) {
+    const confirmed = window.confirm(
+      `Delete ${client.name} (${client.business_name})? This removes the client and all their campaign data — it does not touch anything already built in Google Ads.`
+    );
+    if (!confirmed) return;
+
+    const { error } = await supabase.from("clients").delete().eq("id", client.id);
+    if (error) {
+      window.alert(`Delete failed: ${error.message}`);
+      return;
+    }
+    setRefreshKey((k) => k + 1);
+  }
+
+  async function handleRetry(client: ClientRow) {
+    if (!client.primaryCampaignId) return;
+
+    const { error } = await supabase
+      .from("campaigns")
+      .update({ status: "pending", error_message: null })
+      .eq("id", client.primaryCampaignId);
+
+    if (error) {
+      window.alert(`Retry failed: ${error.message}`);
+      return;
+    }
+
+    const webhookUrl = import.meta.env.VITE_N8N_BUILD_CAMPAIGN_WEBHOOK_URL;
+    if (webhookUrl) {
+      try {
+        await fetch(webhookUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ campaign_id: client.primaryCampaignId }),
+        });
+      } catch {
+        // Row is reset to 'pending' either way — can be retried again or
+        // built manually if the webhook call itself failed to reach n8n.
+      }
+    }
+    setRefreshKey((k) => k + 1);
+  }
 
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10 text-slate-900">
@@ -103,17 +153,23 @@ export default function DashboardPage() {
           </div>
           <div className="flex items-center gap-3">
             <Link
+              to="/settings"
+              className="rounded-lg border-2 border-slate-900 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-900 hover:text-white"
+            >
+              Settings
+            </Link>
+            <Link
               to="/account"
               className="rounded-lg border-2 border-slate-900 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-900 hover:text-white"
             >
               Account
             </Link>
-            <Link
-              to="/intake"
+            <button
+              onClick={() => setShowIntake(true)}
               className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
             >
               + New Campaign
-            </Link>
+            </button>
           </div>
         </div>
 
@@ -140,6 +196,7 @@ export default function DashboardPage() {
                   <th className="px-4 py-3">Cost</th>
                   <th className="px-4 py-3">Conv. Value</th>
                   <th className="px-4 py-3">ROAS</th>
+                  <th className="px-4 py-3">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -165,6 +222,24 @@ export default function DashboardPage() {
                         `${c.roas.toFixed(2)}x`
                       )}
                     </td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-2">
+                        {c.primaryCampaignId && c.status && RETRYABLE_STATUSES.includes(c.status) && (
+                          <button
+                            onClick={() => handleRetry(c)}
+                            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                          >
+                            Retry
+                          </button>
+                        )}
+                        <button
+                          onClick={() => handleDelete(c)}
+                          className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -172,6 +247,15 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
+
+      {showIntake && (
+        <IntakeModal
+          onClose={() => {
+            setShowIntake(false);
+            setRefreshKey((k) => k + 1);
+          }}
+        />
+      )}
     </main>
   );
 }

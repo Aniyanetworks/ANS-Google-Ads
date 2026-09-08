@@ -1,79 +1,837 @@
 {
-  "name": "build-campaign",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
         "path": "build-campaign",
-        "responseMode": "onReceived",
         "options": {}
       },
-      "id": "webhook-1",
+      "id": "53049b96-3806-467f-a902-191b89546545",
       "name": "Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
-      "position": [220, 300],
+      "position": [
+        -16,
+        1168
+      ],
       "webhookId": "build-campaign"
     },
     {
       "parameters": {
         "jsCode": "const id = $json.body.campaign_id;\nconst uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nif (typeof id !== 'string' || !uuidRe.test(id)) {\n  throw new Error('campaign_id missing or not a valid UUID: ' + JSON.stringify(id));\n}\nreturn [{ json: { campaign_id: id } }];"
       },
-      "id": "validate-1",
+      "id": "78e80b5c-0d64-436c-a005-b51db2aa07ed",
       "name": "Validate campaign_id",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 300],
-      "notes": "Rejects anything that isn't UUID-shaped before it's sent onward."
+      "position": [
+        224,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "google_ads_settings",
+        "limit": 1,
+        "filterType": "none"
+      },
+      "id": "4763975b-a54a-41c7-9383-3ea3c2fd2bd5",
+      "name": "Get Google Ads credentials",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        432,
+        1168
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "After import, set this node's credential to your Supabase project (Settings > Credentials > Supabase â€” URL + service_role key). This node type/parameter set is unverified against your actual n8n version (I have no live access to confirm it) â€” if it errors on first run, check the node's error message against the Supabase node's actual current parameters and adjust. Reads the single row from google_ads_settings (managed from the dashboard's /settings page) instead of hardcoding secrets in this workflow."
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "campaigns",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $('Validate campaign_id').item.json.campaign_id }}"
+            }
+          ]
+        }
+      },
+      "id": "deb0d6c9-68c8-4c93-916e-613a8212754f",
+      "name": "Get campaign",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        656,
+        1168
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "clients",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $json.client_id }}"
+            }
+          ]
+        }
+      },
+      "id": "64483379-37c2-404a-82f9-32604b2f49ed",
+      "name": "Get client",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        880,
+        1168
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $('Get campaign').item.json;\nconst client = $json;\nif (!row || !row.id) throw new Error('Campaign row not found.');\nconst rawCustomerId = row.google_ads_customer_id;\nif (!rawCustomerId) {\n  throw new Error('campaigns.google_ads_customer_id is not set â€” the client needs a Google Ads account already linked under the MCC before this can run.');\n}\n// Google Ads REST paths need digits only â€” strip dashes/spaces in case\n// they slipped in upstream (e.g. someone pasted '161-685-9870' as-is).\nconst customerId = String(rawCustomerId).replace(/[^0-9]/g, '');\n\n// Accounts this OAuth login can access directly (NOT as an MCC child) â€”\n// sending login-customer-id for these fails with USER_PERMISSION_DENIED\n// because they aren't actually linked under the MCC. Mirrors\n// DIRECT_ACCESS_CUSTOMER_IDS in code/sync_all_clients.py. Every new client\n// onboarded through the intake form is a real MCC child and gets the\n// header normally.\nconst DIRECT_ACCESS_CUSTOMER_IDS = ['3534195221'];\nconst mccCustomerId = $('Get Google Ads credentials').item.json.mcc_customer_id;\nconst loginCustomerId = DIRECT_ACCESS_CUSTOMER_IDS.includes(customerId) ? '' : mccCustomerId;\n\nreturn [{\n  json: {\n    campaignRowId: row.id,\n    customerId,\n    loginCustomerId,\n    campaignName: row.campaign_name,\n    primaryKeyword: row.primary_keyword,\n    goal: row.goal,\n    dailyBudgetUsd: Number(row.daily_budget_usd),\n    biddingStrategy: (row.bidding_strategy || '').toLowerCase(),\n    languages: row.languages || ['English'],\n    targetedLocations: row.targeted_locations || [],\n    adSchedule: (row.ad_schedule || '24 hours').toLowerCase(),\n    businessName: client.business_name,\n    websiteUrl: client.website_url || 'https://example.com',\n  },\n}];"
+      },
+      "id": "5d785d0f-d96b-4164-8f27-913c025cbcb2",
+      "name": "Prepare context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        1168
+      ],
+      "notes": "Throws (stopping the whole execution, visible in n8n's execution log) if the row is missing or has no linked Google Ads account. Unlike the Python version, this workflow does NOT automatically write status='error' back to Supabase on failure â€” check the execution log and reset the row manually if something goes wrong partway through."
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "campaigns",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.campaignRowId }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "building"
+            }
+          ]
+        }
+      },
+      "id": "4106ae99-c61b-4775-8135-a9b4a81078d3",
+      "name": "Mark building",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1312,
+        1168
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.INTERNAL_API_URL }}/build-campaign",
-        "sendHeaders": true,
-        "headerParameters": {
+        "url": "https://oauth2.googleapis.com/token",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
           "parameters": [
-            { "name": "X-API-Key", "value": "={{ $env.INTERNAL_API_KEY }}" },
-            { "name": "Content-Type", "value": "application/json" }
+            {
+              "name": "client_id",
+              "value": "={{ $('Get Google Ads credentials').item.json.client_id }}"
+            },
+            {
+              "name": "client_secret",
+              "value": "={{ $('Get Google Ads credentials').item.json.client_secret }}"
+            },
+            {
+              "name": "refresh_token",
+              "value": "={{ $('Get Google Ads credentials').item.json.refresh_token }}"
+            },
+            {
+              "name": "grant_type",
+              "value": "refresh_token"
+            }
           ]
         },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ campaign_id: $json.campaign_id }) }}",
         "options": {}
       },
-      "id": "call-api-1",
-      "name": "Start campaign build",
+      "id": "542bff53-c1b0-44d7-bd70-8515e948a014",
+      "name": "Refresh Google Ads token",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [660, 300],
-      "notes": "Calls code/api_server.py (a small persistent FastAPI service — see n8n/README.md). Needs INTERNAL_API_URL (e.g. http://your-host:8000) and INTERNAL_API_KEY set as n8n environment variables, matching the .env values on the machine running api_server.py. The build itself runs in the background on that service; this call just confirms it started. The campaigns row's status/error_message (visible on the dashboard) is the source of truth for whether it actually succeeded."
+      "position": [
+        1536,
+        1168
+      ],
+      "notes": "Client id/secret/refresh token now come from the 'Get Google Ads credentials' node (Supabase) instead of being hardcoded. This access token is short-lived (~1hr) and is re-fetched on every workflow run, so that's fine. Every Google Ads HTTP Request node below reads it via {{ $('Refresh Google Ads token').item.json.access_token }}."
     },
     {
       "parameters": {
-        "text": "=Campaign build started for {{ $('Validate campaign_id').item.json.campaign_id }}. Check the dashboard for status once it completes (usually under a minute)."
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Prepare context').item.json.customerId }}/campaignBudgets:mutate",
+        "sendHeaders": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ operations: [{ create: { name: `${$('Prepare context').item.json.campaignName} Budget ${Date.now()}`, amountMicros: String(Math.round($('Prepare context').item.json.dailyBudgetUsd * 1000000)), deliveryMethod: 'STANDARD', explicitlyShared: false } }] }) }}",
+        "options": {},
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Prepare context').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Prepare context').item.json.loginCustomerId }\n    : {}\n)) }}"
       },
-      "id": "notify-started-1",
-      "name": "Notify: started",
+      "id": "d2ff0fbd-2655-4977-bcea-037109af47fd",
+      "name": "Create budget",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        1168
+      ],
+      "notes": "developer-token and login-customer-id now come from the Supabase-backed credentials node â€” same pattern applies to every Google Ads node below."
+    },
+    {
+      "parameters": {
+        "jsCode": "const budgetResource = $('Create budget').item.json.results[0].resourceName;\nconst ctx = $('Prepare context').item.json;\nconst strategy = ctx.biddingStrategy;\n\nlet biddingField;\nif (strategy === 'maximize clicks') {\n  biddingField = { targetSpend: {} };\n} else if (strategy === 'manual cpc') {\n  biddingField = { manualCpc: { enhancedCpcEnabled: false } };\n} else {\n  // Maximize Conversions, or Target CPA (no target value collected in the\n  // intake form yet) â€” falls back to Maximize Conversions, same as the\n  // Python version did.\n  biddingField = { maximizeConversions: {} };\n}\n\nconst body = {\n  operations: [{\n    create: {\n      name: ctx.campaignName,\n      campaignBudget: budgetResource,\n      status: 'PAUSED',\n      advertisingChannelType: 'SEARCH',\n      networkSettings: {\n        targetGoogleSearch: true,\n        targetSearchNetwork: false,\n        targetContentNetwork: false,\n        targetPartnerSearchNetwork: false,\n      },\n      containsEuPoliticalAdvertising: 'DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING',\n      geoTargetTypeSetting: { positiveGeoTargetType: 'PRESENCE' },\n      ...biddingField,\n    },\n  }],\n};\n\nreturn [{ json: { body } }];"
+      },
+      "id": "734224d9-b75b-4657-b1e4-2bf4d8be4df2",
+      "name": "Build campaign body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1984,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Prepare context').item.json.customerId }}/campaigns:mutate",
+        "sendHeaders": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {},
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Prepare context').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Prepare context').item.json.loginCustomerId }\n    : {}\n)) }}"
+      },
+      "id": "ed7ce044-403c-4187-b455-619888dd6b76",
+      "name": "Create campaign",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2192,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/geoTargetConstants:suggest",
+        "sendHeaders": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ locationNames: { names: $('Prepare context').item.json.targetedLocations }, locale: 'en' }) }}",
+        "options": {},
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Prepare context').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Prepare context').item.json.loginCustomerId }\n    : {}\n)) }}"
+      },
+      "id": "eb7e83d0-69d7-4ea0-b5c1-5d31d0aa05b7",
+      "name": "Suggest geo targets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2416,
+        1168
+      ],
+      "notes": "Sends all targeted_locations in ONE suggest call rather than one call per location (which the Python version did, for a cleaner 1:1 best-match per location). This is a simplification: it takes the first (highest-relevance) suggestion per distinct matched search term in the Code node below, which is close but not guaranteed identical to the per-location version. Worth spot-checking the resulting geo criteria in the Google Ads UI after a build."
+    },
+    {
+      "parameters": {
+        "jsCode": "const suggestions = $json.geoTargetConstantSuggestions || [];\nconst seen = new Map();\nfor (const s of suggestions) {\n  const term = s.searchTerm;\n  if (term && !seen.has(term)) {\n    seen.set(term, s.geoTargetConstant.resourceName);\n  }\n}\nconst geoResources = [...seen.values()];\nif (geoResources.length === 0) {\n  throw new Error('No geo target constants resolved for: ' + JSON.stringify($('Prepare context').item.json.targetedLocations));\n}\n\nconst ctx = $('Prepare context').item.json;\nconst campaignResource = $('Create campaign').item.json.results[0].resourceName;\n\nconst languageMap = {\n  english: 'languageConstants/1000',\n  french: 'languageConstants/1002',\n  spanish: 'languageConstants/1003',\n};\n\nconst schedulePresets = {\n  '24 hours': ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'].map(d => [d, 0, 0, 24, 0]),\n  'business hours (mon-fri 9am-6pm)': ['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY'].map(d => [d, 9, 0, 18, 0]),\n};\nconst schedule = schedulePresets[ctx.adSchedule] || schedulePresets['24 hours'];\n\nconst operations = [];\n\nfor (const geoResource of geoResources) {\n  operations.push({ create: { campaign: campaignResource, location: { geoTargetConstant: geoResource } } });\n}\n\nfor (const lang of ctx.languages) {\n  const resource = languageMap[(lang || '').toLowerCase()] || languageMap.english;\n  operations.push({ create: { campaign: campaignResource, language: { languageConstant: resource } } });\n}\n\nfor (const [day, startHour, startMinute, endHour, endMinute] of schedule) {\n  operations.push({\n    create: {\n      campaign: campaignResource,\n      adSchedule: {\n        dayOfWeek: day,\n        startHour,\n        startMinute: 'ZERO',\n        endHour,\n        endMinute: 'ZERO',\n      },\n    },\n  });\n}\n\nreturn [{ json: { body: { operations } } }];"
+      },
+      "id": "34e4fcbb-ed3a-48ae-9528-64fbc8b68ba0",
+      "name": "Build criteria body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Prepare context').item.json.customerId }}/campaignCriteria:mutate",
+        "sendHeaders": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {},
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Prepare context').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Prepare context').item.json.loginCustomerId }\n    : {}\n)) }}"
+      },
+      "id": "1c8b15a9-c813-4bef-ac9a-08c3b6d540e7",
+      "name": "Add geo/language/schedule",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2864,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Prepare context').item.json.customerId }}/sharedSets:mutate",
+        "sendHeaders": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ operations: [{ create: { name: `${$('Prepare context').item.json.businessName} Negatives ${Date.now()}`, type: 'NEGATIVE_KEYWORDS' } }] }) }}",
+        "options": {},
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Prepare context').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Prepare context').item.json.loginCustomerId }\n    : {}\n)) }}"
+      },
+      "id": "554f9ff9-64a7-4694-98ae-4fa9428ee260",
+      "name": "Create negative list",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3072,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const terms = [\n  'jobs','job','hiring','recruit','recruiting','recruitment','recruiter','career','careers','employment','employer','employee','salary','salaries','wage','wages','hourly pay','resume','cv','intern','interns','internship','internships','apprentice','apprentices','apprenticeship','apprenticeships','volunteer','vacancy','vacancies','position open','hiring near me','work from home','indeed','glassdoor','ziprecruiter',\n  'diy','do it yourself','how to','howto','how do','how do you','tutorial','tutorials','guide','guides','step by step','instructions','youtube','video','videos','template','templates','example','examples','how to fix','how to repair','how to install','how to remove','how to clean','how to replace','how to build','homemade','yourself',\n  'school','schools','schooling','college','university','class','classes','course','courses','training','trainee','trained','certification','certificate','certified','license cost','licensing','license requirement','license requirements','become a','how to become','exam',\n  'free','freebie','giveaway','giveaways','sample','samples','trial','discount','discounted','voucher','coupon','coupons','promo code','clearance','secondhand',\n  'what is','what is a','what does','what are','meaning','definition','wikipedia','wiki','reddit','quora','forum','forums','blog','review','reviews','ratings',\n  'complaint','complaints','refund','refunds','return policy','cancel','cancellation','warranty claim','problem','problems','not working','broken','contact','phone number','customer service','help','login','sign in',\n  'porn','adult','nude','sex','gambling','casino','weed','marijuana','cbd','crypto','bitcoin','nft','mlm','ponzi',\n];\n\nconst sharedSetResource = $('Create negative list').item.json.results[0].resourceName;\nconst operations = terms.map(term => ({\n  create: {\n    sharedSet: sharedSetResource,\n    keyword: { text: term, matchType: 'BROAD' },\n  },\n}));\n\nreturn [{ json: { body: { operations }, sharedSetResource } }];"
+      },
+      "id": "b05849ff-feb4-449c-a323-5bfc483cda6a",
+      "name": "Build negatives body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3296,
+        1168
+      ],
+      "notes": "Same 149-term universal list used in code/add_shared_negative_list.py, ported directly into JS. If that list is ever edited, update both places."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Prepare context').item.json.customerId }}/sharedCriteria:mutate",
+        "sendHeaders": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {},
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Prepare context').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Prepare context').item.json.loginCustomerId }\n    : {}\n)) }}"
+      },
+      "id": "838f4955-67d2-414c-9d2e-afc522822927",
+      "name": "Add negative keywords",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3520,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Prepare context').item.json.customerId }}/campaignSharedSets:mutate",
+        "sendHeaders": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ operations: [{ create: { campaign: $('Create campaign').item.json.results[0].resourceName, sharedSet: $('Build negatives body').item.json.sharedSetResource } }] }) }}",
+        "options": {},
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Prepare context').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Prepare context').item.json.loginCustomerId }\n    : {}\n)) }}"
+      },
+      "id": "04586512-21e5-493e-9146-6213ec49c268",
+      "name": "Attach negative list to campaign",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3744,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Prepare context').item.json.customerId }}/adGroups:mutate",
+        "sendHeaders": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ operations: [{ create: { name: `${$('Prepare context').item.json.primaryKeyword} - SKAG`, campaign: $('Create campaign').item.json.results[0].resourceName, status: 'PAUSED', type: 'SEARCH_STANDARD' } }] }) }}",
+        "options": {},
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Prepare context').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Prepare context').item.json.loginCustomerId }\n    : {}\n)) }}"
+      },
+      "id": "219d96dc-43ed-489c-a436-35dc5b04cdef",
+      "name": "Create ad group",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3952,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Prepare context').item.json.customerId }}/adGroupCriteria:mutate",
+        "sendHeaders": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ operations: [{ create: { adGroup: $('Create ad group').item.json.results[0].resourceName, status: 'ENABLED', keyword: { text: $('Prepare context').item.json.primaryKeyword, matchType: 'PHRASE' } } }] }) }}",
+        "options": {},
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Prepare context').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Prepare context').item.json.loginCustomerId }\n    : {}\n)) }}"
+      },
+      "id": "383f6ccc-0849-4612-8f78-4fb726367d40",
+      "name": "Create keyword",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4176,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $('Prepare context').item.json;\nconst { businessName, primaryKeyword, goal, websiteUrl } = ctx;\nconst titleKeyword = primaryKeyword.replace(/\\b\\w/g, c => c.toUpperCase());\n\nconst pinned = [titleKeyword, businessName, `${titleKeyword} Experts`];\nconst unpinned = [\n  `Contact ${businessName} Today`,\n  'Free Consultation Available',\n  'No Commitment Required',\n  'Trusted Local Service',\n  'Get Started Today',\n  `${goal.charAt(0).toUpperCase()}${goal.slice(1)} Made Simple`,\n  'Book Online Today',\n  'Serving Your Area',\n];\nconst descriptions = [\n  `${businessName} offers ${primaryKeyword}. Contact us today to get started.`,\n  'Free consultation, no commitment required. See how we can help.',\n  'Trusted, local, and ready to help. Reach out to learn more.',\n  `Looking for ${primaryKeyword}? ${businessName} is here to help.`,\n];\n\nconst headlines = [\n  ...pinned.map(text => ({ text: text.slice(0, 30), pinnedField: 'HEADLINE_1' })),\n  ...unpinned.map(text => ({ text: text.slice(0, 30) })),\n];\nconst descAssets = descriptions.map(text => ({ text: text.slice(0, 90) }));\n\nconst body = {\n  operations: [{\n    create: {\n      adGroup: $('Create ad group').item.json.results[0].resourceName,\n      status: 'PAUSED',\n      ad: {\n        finalUrls: [websiteUrl],\n        responsiveSearchAd: { headlines, descriptions: descAssets },\n      },\n    },\n  }],\n};\n\nreturn [{ json: { body } }];"
+      },
+      "id": "d32850cc-3cb7-456d-9469-259f443f4bf0",
+      "name": "Build RSA body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4400,
+        1168
+      ],
+      "notes": "Generic, editorially-compliant placeholder copy â€” same approach as build_client_campaign.py's build_placeholder_rsa_copy(). Not business-specific marketing; refine via /generate-ads or the AI messaging system once there's real site content to work from."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Prepare context').item.json.customerId }}/adGroupAds:mutate",
+        "sendHeaders": true,
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {},
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Prepare context').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Prepare context').item.json.loginCustomerId }\n    : {}\n)) }}"
+      },
+      "id": "3161c027-e14e-402e-aa42-e42cbfdc1f43",
+      "name": "Create RSA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4624,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "campaigns",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Prepare context').item.json.campaignRowId }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": {
+                "__rl": true,
+                "value": "status",
+                "mode": "list",
+                "cachedResultName": "status"
+              },
+              "fieldValue": "paused"
+            },
+            {
+              "fieldId": {
+                "__rl": true,
+                "value": "google_ads_campaign_resource",
+                "mode": "list",
+                "cachedResultName": "google_ads_campaign_resource"
+              },
+              "fieldValue": "={{ $('Create campaign').item.json.results[0].resourceName }}"
+            },
+            {
+              "fieldId": {
+                "__rl": true,
+                "value": "google_ads_ad_group_resource",
+                "mode": "list",
+                "cachedResultName": "google_ads_ad_group_resource"
+              },
+              "fieldValue": "={{ $('Create ad group').item.json.results[0].resourceName }}"
+            }
+          ]
+        }
+      },
+      "id": "5e01ee01-e24c-4b91-bc34-1cc132a1c92f",
+      "name": "Mark paused (success)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4832,
+        1168
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "3b133baa-d4b4-4d32-b711-c54fb85f1686",
+      "name": "Notify: success",
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
-      "position": [880, 300],
+      "position": [
+        5056,
+        1168
+      ],
       "notes": "Replace this No-Op with your actual Slack/Email node."
     }
   ],
   "connections": {
     "Webhook": {
-      "main": [[{ "node": "Validate campaign_id", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Validate campaign_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Validate campaign_id": {
-      "main": [[{ "node": "Start campaign build", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Get Google Ads credentials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
-    "Start campaign build": {
-      "main": [[{ "node": "Notify: started", "type": "main", "index": 0 }]]
+    "Get Google Ads credentials": {
+      "main": [
+        [
+          {
+            "node": "Get campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get campaign": {
+      "main": [
+        [
+          {
+            "node": "Get client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get client": {
+      "main": [
+        [
+          {
+            "node": "Prepare context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare context": {
+      "main": [
+        [
+          {
+            "node": "Mark building",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark building": {
+      "main": [
+        [
+          {
+            "node": "Refresh Google Ads token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refresh Google Ads token": {
+      "main": [
+        [
+          {
+            "node": "Create budget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create budget": {
+      "main": [
+        [
+          {
+            "node": "Build campaign body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build campaign body": {
+      "main": [
+        [
+          {
+            "node": "Create campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create campaign": {
+      "main": [
+        [
+          {
+            "node": "Suggest geo targets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suggest geo targets": {
+      "main": [
+        [
+          {
+            "node": "Build criteria body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build criteria body": {
+      "main": [
+        [
+          {
+            "node": "Add geo/language/schedule",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add geo/language/schedule": {
+      "main": [
+        [
+          {
+            "node": "Create negative list",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create negative list": {
+      "main": [
+        [
+          {
+            "node": "Build negatives body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build negatives body": {
+      "main": [
+        [
+          {
+            "node": "Add negative keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add negative keywords": {
+      "main": [
+        [
+          {
+            "node": "Attach negative list to campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach negative list to campaign": {
+      "main": [
+        [
+          {
+            "node": "Create ad group",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create ad group": {
+      "main": [
+        [
+          {
+            "node": "Create keyword",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create keyword": {
+      "main": [
+        [
+          {
+            "node": "Build RSA body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build RSA body": {
+      "main": [
+        [
+          {
+            "node": "Create RSA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create RSA": {
+      "main": [
+        [
+          {
+            "node": "Mark paused (success)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark paused (success)": {
+      "main": [
+        [
+          {
+            "node": "Notify: success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "pinData": {},
-  "settings": {
-    "executionOrder": "v1"
+  "pinData": {
+    "Webhook": [
+      {
+        "headers": {
+          "host": "n8n.srv1300653.hstgr.cloud",
+          "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36",
+          "content-length": "54",
+          "accept": "*/*",
+          "accept-encoding": "gzip, deflate, br, zstd",
+          "accept-language": "en-US,en;q=0.9,bn;q=0.8",
+          "content-type": "application/json",
+          "origin": "http://localhost:5173",
+          "priority": "u=1, i",
+          "referer": "http://localhost:5173/",
+          "sec-ch-ua": "\"Chromium\";v=\"152\", \"Not?A_Brand\";v=\"24\", \"Google Chrome\";v=\"152\"",
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": "\"Windows\"",
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "cross-site",
+          "x-forwarded-for": "103.111.88.88",
+          "x-forwarded-host": "n8n.srv1300653.hstgr.cloud",
+          "x-forwarded-port": "443",
+          "x-forwarded-proto": "https",
+          "x-forwarded-server": "2db613154e75",
+          "x-real-ip": "103.111.88.88"
+        },
+        "params": {},
+        "query": {},
+        "body": {
+          "campaign_id": "95bc8d7a-e8cd-46ea-9b30-ef5fb88f6915"
+        },
+        "webhookUrl": "https://n8n.srv1300653.hstgr.cloud/webhook/build-campaign",
+        "executionMode": "production"
+      }
+    ]
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5ed296676961c5ed41c639e1683078855c8f50e4c5aa1466963b063405345b3e"
   }
 }

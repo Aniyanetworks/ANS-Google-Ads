@@ -99,23 +99,64 @@ create table if not exists messages (
 
 create index if not exists messages_client_id_idx on messages(client_id);
 
+-- Single-row config table for the account-wide Google Ads API credentials
+-- (developer token, OAuth client id/secret/refresh token, MCC customer
+-- id). These used to be hardcoded directly into n8n workflow JSON files,
+-- which is awkward to rotate and puts secrets in plain text in version
+-- control. Now n8n fetches this row at the start of each workflow run
+-- instead. NOT per-client — campaigns.google_ads_customer_id already
+-- holds each client's own account id.
+create table if not exists google_ads_settings (
+  id uuid primary key default gen_random_uuid(),
+  developer_token text not null,
+  client_id text not null,
+  client_secret text not null,
+  refresh_token text not null,
+  mcc_customer_id text not null,
+  updated_at timestamptz not null default now()
+);
+
+create or replace function set_updated_at_google_ads_settings()
+returns trigger as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists google_ads_settings_set_updated_at on google_ads_settings;
+create trigger google_ads_settings_set_updated_at
+  before update on google_ads_settings
+  for each row execute function set_updated_at_google_ads_settings();
+
 alter table clients enable row level security;
 alter table campaigns enable row level security;
 alter table campaign_metrics enable row level security;
 alter table recommendations enable row level security;
 alter table messages enable row level security;
+alter table google_ads_settings enable row level security;
 
--- clients: anon can create (intake form), only the agency can read/update.
+-- clients: anyone can create via the intake form — anon when submitted
+-- from the public /intake page, authenticated when the agency submits it
+-- from the dashboard's popup (a logged-in session uses the authenticated
+-- role, not anon, even though the person is the same "public-facing"
+-- submitter in both cases). Only the agency can read/update.
 create policy "anon can insert clients" on clients
   for insert to anon with check (true);
+create policy "authenticated can insert clients" on clients
+  for insert to authenticated with check (true);
 create policy "authenticated can read clients" on clients
   for select to authenticated using (true);
 create policy "authenticated can update clients" on clients
   for update to authenticated using (true) with check (true);
+create policy "authenticated can delete clients" on clients
+  for delete to authenticated using (true);
 
--- campaigns: same shape — anon creates via intake, agency manages the rest.
+-- campaigns: same shape as clients above.
 create policy "anon can insert campaigns" on campaigns
   for insert to anon with check (true);
+create policy "authenticated can insert campaigns" on campaigns
+  for insert to authenticated with check (true);
 create policy "authenticated can read campaigns" on campaigns
   for select to authenticated using (true);
 create policy "authenticated can update campaigns" on campaigns
@@ -137,6 +178,16 @@ create policy "authenticated can update recommendations" on recommendations
 create policy "authenticated can read messages" on messages
   for select to authenticated using (true);
 create policy "authenticated can update messages" on messages
+  for update to authenticated using (true) with check (true);
+
+-- google_ads_settings: agency-only read/update from the dashboard's
+-- settings page. No insert/delete policy — the single row is seeded once
+-- via the service_role key and only ever updated after that. n8n reads
+-- this via its own Supabase credential (service_role), which bypasses RLS
+-- entirely, so no policy is needed for that access path.
+create policy "authenticated can read google_ads_settings" on google_ads_settings
+  for select to authenticated using (true);
+create policy "authenticated can update google_ads_settings" on google_ads_settings
   for update to authenticated using (true) with check (true);
 
 -- Keep campaigns.updated_at current on every update.

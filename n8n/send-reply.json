@@ -52,7 +52,7 @@
           "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
           "conditions": [
             {
-              "leftValue": "={{ $json[0].proposed_action }}",
+              "leftValue": "={{ $json.proposed_action }}",
               "rightValue": "",
               "operator": { "type": "object", "operation": "notEmpty" }
             }
@@ -94,10 +94,10 @@
       "parameters": {
         "resource": "message",
         "operation": "send",
-        "sendTo": "={{ $('Get message').item.json[0].from_email }}",
-        "subject": "=Re: {{ $('Get message').item.json[0].subject || 'Your message' }}",
+        "sendTo": "={{ $('Get message').item.json.from_email }}",
+        "subject": "=Re: {{ $('Get message').item.json.subject || 'Your message' }}",
         "emailType": "text",
-        "message": "={{ $('Get message').item.json[0].ai_draft_body }}",
+        "message": "={{ $('Get message').item.json.ai_draft_body }}",
         "options": {}
       },
       "id": "send-email-1",
