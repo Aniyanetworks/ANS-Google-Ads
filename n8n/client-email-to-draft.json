@@ -1,0 +1,248 @@
+{
+  "name": "client-email-to-draft",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [{ "mode": "everyMinute" }]
+        },
+        "simple": true,
+        "filters": {}
+      },
+      "id": "gmail-trigger-1",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [200, 300],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      },
+      "notes": "After import, connect this node to your client-support Gmail account (Settings > Credentials > Gmail OAuth2, then select it here). Polls every minute by default — adjust in pollTimes if you want less frequent checks. Field names below (from/subject/text) match n8n's standard Gmail Trigger output with Simplify on, as of recent versions — double check against your version's actual output in one test execution."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Gmail's 'from' is usually \"Name <email@domain.com>\" — pull just the address.\nconst raw = $json.from || '';\nconst match = raw.match(/<([^>]+)>/);\nconst fromEmail = (match ? match[1] : raw).trim().toLowerCase();\nreturn [{ json: { fromEmail, subject: $json.subject || '', body: $json.text || $json.snippet || '' } }];"
+      },
+      "id": "extract-email-1",
+      "name": "Extract sender email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/clients?email=eq.{{ encodeURIComponent($json.fromEmail) }}&select=id,name,business_name",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "lookup-client-1",
+      "name": "Look up client",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 300],
+      "notes": "Needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY available to n8n as environment variables (self-hosted: set in n8n's .env / process env; n8n.cloud: Settings > Environment). If $env access is blocked in your instance, replace these header values with an n8n Header Auth credential instead."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.length }}",
+              "rightValue": 0,
+              "operator": { "type": "number", "operation": "gt" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "client-found-1",
+      "name": "Client found?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "text": "=Received email from unrecognized sender: {{ $('Extract sender email').item.json.fromEmail }}. No matching client row — needs manual follow-up.\n\nSubject: {{ $('Extract sender email').item.json.subject }}"
+      },
+      "id": "notify-unknown-1",
+      "name": "Notify: unrecognized sender",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1080, 460],
+      "notes": "Replace with your actual Slack/Email node."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/campaigns?client_id=eq.{{ $('Look up client').item.json[0].id }}&select=id,campaign_name,status,daily_budget_usd&limit=1",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-campaign-1",
+      "name": "Get client's campaign",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "Prefer", "value": "return=representation" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ client_id: $('Look up client').item.json[0].id, direction: 'inbound', channel: 'email', from_email: $('Extract sender email').item.json.fromEmail, subject: $('Extract sender email').item.json.subject, body: $('Extract sender email').item.json.body, status: 'new' }) }}",
+        "options": {}
+      },
+      "id": "insert-message-1",
+      "name": "Insert inbound message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Client: {{ $('Look up client').item.json[0].business_name }}. Campaign: {{ ($('Get client\\'s campaign').item.json[0] || {}).campaign_name || 'none yet' }}, status {{ ($('Get client\\'s campaign').item.json[0] || {}).status || 'n/a' }}, daily budget ${{ ($('Get client\\'s campaign').item.json[0] || {}).daily_budget_usd || 'n/a' }}.\n\nClient's email:\n\n{{ $('Extract sender email').item.json.body }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are drafting a reply on behalf of a Google Ads agency to a client email. This draft will be reviewed and edited by a human before anything is sent or applied — do not promise anything you are not instructed to, and do not claim a change has already been made. If the client is asking for a concrete campaign change (budget, pause/resume, targeting), describe it in proposed_action as a small structured object; otherwise proposed_action must be null."
+        }
+      },
+      "id": "ai-agent-1",
+      "name": "Draft reply (AI Agent)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 1.7,
+      "position": [1520, 300]
+    },
+    {
+      "parameters": {
+        "model": { "value": "claude-sonnet-5" },
+        "options": {}
+      },
+      "id": "anthropic-chat-model-1",
+      "name": "Anthropic Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1,
+      "position": [1440, 500],
+      "credentials": {
+        "anthropicApi": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Anthropic account"
+        }
+      },
+      "notes": "After import, set this node's credential to your Anthropic API key (Settings > Credentials > Anthropic) — the placeholder above won't resolve on its own."
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"reply\": { \"type\": \"string\" },\n    \"proposed_action\": { \"type\": [\"object\", \"null\"] }\n  },\n  \"required\": [\"reply\", \"proposed_action\"]\n}"
+      },
+      "id": "output-parser-1",
+      "name": "Structured Output Parser",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.2,
+      "position": [1620, 500]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/messages?id=eq.{{ $('Insert inbound message').item.json[0].id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ ai_draft_body: $json.output.reply, proposed_action: $json.output.proposed_action, status: 'drafted' }) }}",
+        "options": {}
+      },
+      "id": "update-message-1",
+      "name": "Save draft to message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1960, 300]
+    },
+    {
+      "parameters": {
+        "text": "=New client message needs review — {{ $('Look up client').item.json[0].business_name }}: /dashboard/clients/{{ $('Look up client').item.json[0].id }}"
+      },
+      "id": "notify-review-1",
+      "name": "Notify: needs review",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [2180, 300],
+      "notes": "Replace with your actual Slack/Email node."
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [[{ "node": "Extract sender email", "type": "main", "index": 0 }]]
+    },
+    "Extract sender email": {
+      "main": [[{ "node": "Look up client", "type": "main", "index": 0 }]]
+    },
+    "Look up client": {
+      "main": [[{ "node": "Client found?", "type": "main", "index": 0 }]]
+    },
+    "Client found?": {
+      "main": [
+        [{ "node": "Get client's campaign", "type": "main", "index": 0 }],
+        [{ "node": "Notify: unrecognized sender", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get client's campaign": {
+      "main": [[{ "node": "Insert inbound message", "type": "main", "index": 0 }]]
+    },
+    "Insert inbound message": {
+      "main": [[{ "node": "Draft reply (AI Agent)", "type": "main", "index": 0 }]]
+    },
+    "Anthropic Chat Model": {
+      "ai_languageModel": [[{ "node": "Draft reply (AI Agent)", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [[{ "node": "Draft reply (AI Agent)", "type": "ai_outputParser", "index": 0 }]]
+    },
+    "Draft reply (AI Agent)": {
+      "main": [[{ "node": "Save draft to message", "type": "main", "index": 0 }]]
+    },
+    "Save draft to message": {
+      "main": [[{ "node": "Notify: needs review", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

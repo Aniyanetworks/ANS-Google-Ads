@@ -1,0 +1,79 @@
+{
+  "name": "build-campaign",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "build-campaign",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "webhookId": "build-campaign"
+    },
+    {
+      "parameters": {
+        "jsCode": "const id = $json.body.campaign_id;\nconst uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nif (typeof id !== 'string' || !uuidRe.test(id)) {\n  throw new Error('campaign_id missing or not a valid UUID: ' + JSON.stringify(id));\n}\nreturn [{ json: { campaign_id: id } }];"
+      },
+      "id": "validate-1",
+      "name": "Validate campaign_id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "notes": "Rejects anything that isn't UUID-shaped before it's sent onward."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.INTERNAL_API_URL }}/build-campaign",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-API-Key", "value": "={{ $env.INTERNAL_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ campaign_id: $json.campaign_id }) }}",
+        "options": {}
+      },
+      "id": "call-api-1",
+      "name": "Start campaign build",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [660, 300],
+      "notes": "Calls code/api_server.py (a small persistent FastAPI service — see n8n/README.md). Needs INTERNAL_API_URL (e.g. http://your-host:8000) and INTERNAL_API_KEY set as n8n environment variables, matching the .env values on the machine running api_server.py. The build itself runs in the background on that service; this call just confirms it started. The campaigns row's status/error_message (visible on the dashboard) is the source of truth for whether it actually succeeded."
+    },
+    {
+      "parameters": {
+        "text": "=Campaign build started for {{ $('Validate campaign_id').item.json.campaign_id }}. Check the dashboard for status once it completes (usually under a minute)."
+      },
+      "id": "notify-started-1",
+      "name": "Notify: started",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [880, 300],
+      "notes": "Replace this No-Op with your actual Slack/Email node."
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Validate campaign_id", "type": "main", "index": 0 }]]
+    },
+    "Validate campaign_id": {
+      "main": [[{ "node": "Start campaign build", "type": "main", "index": 0 }]]
+    },
+    "Start campaign build": {
+      "main": [[{ "node": "Notify: started", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

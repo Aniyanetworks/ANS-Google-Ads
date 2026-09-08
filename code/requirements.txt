@@ -1,0 +1,6 @@
+google-ads
+python-dotenv
+google-auth-oauthlib
+supabase
+fastapi
+uvicorn[standard]

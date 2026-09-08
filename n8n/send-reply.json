@@ -1,0 +1,167 @@
+{
+  "name": "send-reply",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "send-reply",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "webhook-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "send-reply"
+    },
+    {
+      "parameters": {
+        "jsCode": "const id = $json.body.message_id;\nconst uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nif (typeof id !== 'string' || !uuidRe.test(id)) {\n  throw new Error('message_id missing or not a valid UUID: ' + JSON.stringify(id));\n}\nreturn [{ json: { message_id: id } }];"
+      },
+      "id": "validate-1",
+      "name": "Validate message_id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300],
+      "notes": "Rejects anything that isn't UUID-shaped before it reaches a shell command in the Apply proposed action step."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/messages?id=eq.{{ $json.message_id }}&select=*",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "get-message-1",
+      "name": "Get message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 300],
+      "notes": "Needs SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY available to n8n as environment variables (same as the other workflows)."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "leftValue": "={{ $json[0].proposed_action }}",
+              "rightValue": "",
+              "operator": { "type": "object", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "has-action-1",
+      "name": "Has proposed_action?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.INTERNAL_API_URL }}/apply-action",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-API-Key", "value": "={{ $env.INTERNAL_API_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ message_id: $('Validate message_id').item.json.message_id }) }}",
+        "options": {}
+      },
+      "id": "apply-action-1",
+      "name": "Apply proposed action",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1080, 220],
+      "notes": "Calls code/api_server.py's /apply-action endpoint, which currently just returns 501 Not Implemented — the actual dispatch logic (code/apply_action.py) is deliberately deferred until we've seen a few real proposed_action shapes from the AI drafting workflow, so it matches reality instead of a guess. This branch will fail until that's built; build_client_campaign.py's logic is a template for how to add it once ready."
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "send",
+        "sendTo": "={{ $('Get message').item.json[0].from_email }}",
+        "subject": "=Re: {{ $('Get message').item.json[0].subject || 'Your message' }}",
+        "emailType": "text",
+        "message": "={{ $('Get message').item.json[0].ai_draft_body }}",
+        "options": {}
+      },
+      "id": "send-email-1",
+      "name": "Send reply email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [1300, 300],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      },
+      "notes": "After import, connect this node to the same Gmail account used by client-email-to-draft's trigger (Settings > Credentials > Gmail OAuth2). Sends from whichever account the credential is authorized for — no separate 'from' field needed like SMTP had."
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $env.SUPABASE_URL }}/rest/v1/messages?id=eq.{{ $('Validate message_id').item.json.message_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "apikey", "value": "={{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Authorization", "value": "=Bearer {{ $env.SUPABASE_SERVICE_ROLE_KEY }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'sent', sent_at: new Date().toISOString() }) }}",
+        "options": {}
+      },
+      "id": "mark-sent-1",
+      "name": "Mark message sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1520, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Validate message_id", "type": "main", "index": 0 }]]
+    },
+    "Validate message_id": {
+      "main": [[{ "node": "Get message", "type": "main", "index": 0 }]]
+    },
+    "Get message": {
+      "main": [[{ "node": "Has proposed_action?", "type": "main", "index": 0 }]]
+    },
+    "Has proposed_action?": {
+      "main": [
+        [{ "node": "Apply proposed action", "type": "main", "index": 0 }],
+        [{ "node": "Send reply email", "type": "main", "index": 0 }]
+      ]
+    },
+    "Apply proposed action": {
+      "main": [[{ "node": "Send reply email", "type": "main", "index": 0 }]]
+    },
+    "Send reply email": {
+      "main": [[{ "node": "Mark message sent", "type": "main", "index": 0 }]]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
