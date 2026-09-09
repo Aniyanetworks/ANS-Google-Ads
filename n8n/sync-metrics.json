@@ -187,7 +187,8 @@
           "name": "Supabase Google Ads"
         }
       },
-      "notes": "Delete-then-create instead of upsert, since the native Supabase node's upsert support is unverified. Clears yesterday's row (if this campaign was already synced today) before inserting a fresh one — makes re-runs idempotent. The 'delete' operation itself is unverified against your instance; if its Field Name/ID dropdowns don't resolve, same fix pattern as everywhere else — tell me what the UI shows."
+      "alwaysOutputData": true,
+      "notes": "Delete-then-create instead of upsert, since the native Supabase node's upsert support is unverified. Clears yesterday's row (if this campaign was already synced today) before inserting a fresh one — makes re-runs idempotent. The 'delete' operation itself is unverified against your instance; if its Field Name/ID dropdowns don't resolve, same fix pattern as everywhere else — tell me what the UI shows.\n\nalwaysOutputData is on: n8n treats zero rows deleted (the normal, expected first-ever-run case) as zero output items and halts the whole workflow there otherwise — confirmed live ('No output data returned')."
     },
     {
       "parameters": {
@@ -490,11 +491,12 @@
           "name": "Supabase Google Ads"
         }
       },
-      "notes": "Clears previously-open recommendations for this campaign before inserting the fresh set — correct behavior, not just idempotency: a recommendation Google Ads no longer surfaces should stop showing as 'open' here too. Does NOT touch rows already marked applied/dismissed."
+      "alwaysOutputData": true,
+      "notes": "Clears previously-open recommendations for this campaign before inserting the fresh set — correct behavior, not just idempotency: a recommendation Google Ads no longer surfaces should stop showing as 'open' here too. Does NOT touch rows already marked applied/dismissed.\n\nalwaysOutputData is on: same zero-rows-halts-the-workflow issue confirmed live on the metrics branch's delete node — no open recommendations yet is the normal first-run case, not an error."
     },
     {
       "parameters": {
-        "jsCode": "const results = $json.results || [];\nconst campaignRowId = $('Filter buildable campaigns').item.json.campaignRowId;\nreturn results.map(r => {\n  const rec = r.recommendation;\n  const base = rec.impact.baseMetrics;\n  const potential = rec.impact.potentialMetrics;\n  const baseCost = Number(base.costMicros || 0) / 1000000;\n  const potentialCost = Number(potential.costMicros || 0) / 1000000;\n  const valueGain = Number(potential.conversionsValue || 0) - Number(base.conversionsValue || 0);\n  const costSavings = baseCost - potentialCost;\n  const dollarsRecoverable = valueGain > 0 ? valueGain : Math.max(costSavings, 0);\n  return {\n    json: {\n      campaign_id: campaignRowId,\n      type: rec.type,\n      dollars_recoverable: dollarsRecoverable,\n      resource_name: rec.resourceName,\n      status: 'open',\n    },\n  };\n});\n"
+        "jsCode": "const results = $('Search recommendations').item.json.results || [];\nconst campaignRowId = $('Filter buildable campaigns').item.json.campaignRowId;\nreturn results.map(r => {\n  const rec = r.recommendation;\n  const base = rec.impact.baseMetrics;\n  const potential = rec.impact.potentialMetrics;\n  const baseCost = Number(base.costMicros || 0) / 1000000;\n  const potentialCost = Number(potential.costMicros || 0) / 1000000;\n  const valueGain = Number(potential.conversionsValue || 0) - Number(base.conversionsValue || 0);\n  const costSavings = baseCost - potentialCost;\n  const dollarsRecoverable = valueGain > 0 ? valueGain : Math.max(costSavings, 0);\n  return {\n    json: {\n      campaign_id: campaignRowId,\n      type: rec.type,\n      dollars_recoverable: dollarsRecoverable,\n      resource_name: rec.resourceName,\n      status: 'open',\n    },\n  };\n});\n"
       },
       "id": "build-rec-items-1",
       "name": "Build recommendation items",
