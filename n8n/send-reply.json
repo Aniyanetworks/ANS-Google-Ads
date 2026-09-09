@@ -71,11 +71,11 @@
           },
           "conditions": [
             {
-              "leftValue": "={{ $json.proposed_action }}",
-              "rightValue": "",
+              "leftValue": "={{ !!$json.proposed_action }}",
+              "rightValue": true,
               "operator": {
-                "type": "object",
-                "operation": "notEmpty"
+                "type": "boolean",
+                "operation": "equals"
               }
             }
           ],
