@@ -1,11 +1,18 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
-import MessageThread from "../components/MessageThread";
-import CampaignChat from "../components/CampaignChat";
-import HintIcon from "../components/HintIcon";
+import IntakeModal from "../components/IntakeModal";
+import EditClientModal from "../components/EditClientModal";
 
-type Client = { id: string; name: string; business_name: string; email: string };
+type Client = {
+  id: string;
+  name: string;
+  business_name: string;
+  email: string;
+  website_url: string | null;
+  phone: string | null;
+  google_ads_customer_id: string | null;
+};
 type Campaign = {
   id: string;
   campaign_name: string;
@@ -14,39 +21,18 @@ type Campaign = {
   daily_budget_usd: number;
 };
 type Metric = { cost: number; conversions_value: number };
-type Recommendation = {
-  id: string;
-  type: string;
-  dollars_recoverable: number;
-  status: string;
-};
 
 const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
-
-function formatType(type: string) {
-  return type
-    .toLowerCase()
-    .split("_")
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-}
-
-type Tab = "recommendations" | "assistant" | "messages";
-
-const TABS: { id: Tab; label: string }[] = [
-  { id: "recommendations", label: "Recommendations" },
-  { id: "assistant", label: "Campaign Assistant" },
-  { id: "messages", label: "Client Suggestions" },
-];
 
 export default function ClientDetailPage() {
   const { clientId } = useParams<{ clientId: string }>();
   const [client, setClient] = useState<Client | null>(null);
   const [campaigns, setCampaigns] = useState<(Campaign & { totals: Metric })[] | null>(null);
-  const [recommendations, setRecommendations] = useState<Recommendation[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("recommendations");
   const [linkCopied, setLinkCopied] = useState(false);
+  const [showIntake, setShowIntake] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     if (!clientId) return;
@@ -54,7 +40,7 @@ export default function ClientDetailPage() {
     async function load() {
       const { data: clientRow, error: clientError } = await supabase
         .from("clients")
-        .select("id, name, business_name, email")
+        .select("id, name, business_name, email, website_url, phone, google_ads_customer_id")
         .eq("id", clientId)
         .single();
 
@@ -97,21 +83,10 @@ export default function ClientDetailPage() {
           totals: totalsByCampaign.get(c.id) ?? { cost: 0, conversions_value: 0 },
         }))
       );
-
-      const { data: recRows } = campaignIds.length
-        ? await supabase
-            .from("recommendations")
-            .select("id, type, dollars_recoverable, status")
-            .in("campaign_id", campaignIds)
-            .eq("status", "open")
-            .order("dollars_recoverable", { ascending: false })
-        : { data: [] };
-
-      setRecommendations(recRows ?? []);
     }
 
     load();
-  }, [clientId]);
+  }, [clientId, refreshKey]);
 
   if (error) {
     return (
@@ -139,19 +114,41 @@ export default function ClientDetailPage() {
         <p className="text-slate-600">
           {client.business_name} · {client.email}
         </p>
-        <button
-          onClick={() => {
-            navigator.clipboard.writeText(`${window.location.origin}/client/${client.id}`);
-            setLinkCopied(true);
-            setTimeout(() => setLinkCopied(false), 2000);
-          }}
-          className="mt-3 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
-        >
-          {linkCopied ? "Copied!" : "Copy client portal link"}
-        </button>
+        <div className="mt-3 flex gap-2">
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(`${window.location.origin}/client/${client.id}`);
+              setLinkCopied(true);
+              setTimeout(() => setLinkCopied(false), 2000);
+            }}
+            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+          >
+            {linkCopied ? "Copied!" : "Copy client portal link"}
+          </button>
+          <Link
+            to={`/dashboard/clients/${clientId}/messages`}
+            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+          >
+            Client Suggestions
+          </Link>
+          <button
+            onClick={() => setShowEdit(true)}
+            className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+          >
+            Edit Client
+          </button>
+        </div>
 
         <section className="mt-8">
-          <h2 className="text-xl font-semibold">Campaigns</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-semibold">Campaigns</h2>
+            <button
+              onClick={() => setShowIntake(true)}
+              className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700"
+            >
+              + Add Campaign
+            </button>
+          </div>
           {campaigns === null ? (
             <p className="mt-3 text-sm text-slate-500">Loading...</p>
           ) : campaigns.length === 0 ? (
@@ -175,7 +172,14 @@ export default function ClientDetailPage() {
                       c.totals.cost > 0 ? c.totals.conversions_value / c.totals.cost : null;
                     return (
                       <tr key={c.id} className="border-b border-slate-100 last:border-0">
-                        <td className="px-4 py-3 font-medium">{c.campaign_name}</td>
+                        <td className="px-4 py-3 font-medium">
+                          <Link
+                            to={`/dashboard/clients/${clientId}/campaigns/${c.id}`}
+                            className="hover:underline"
+                          >
+                            {c.campaign_name}
+                          </Link>
+                        </td>
                         <td className="px-4 py-3 text-slate-500">{c.status}</td>
                         <td className="px-4 py-3">{currency.format(c.daily_budget_usd)}</td>
                         <td className="px-4 py-3">{currency.format(c.totals.cost)}</td>
@@ -197,68 +201,32 @@ export default function ClientDetailPage() {
             </div>
           )}
         </section>
-
-        <div className="mt-10 flex gap-1 border-b border-slate-200">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              className={
-                "-mb-px border-b-2 px-4 py-2 text-sm font-semibold transition " +
-                (tab === t.id
-                  ? "border-slate-900 text-slate-900"
-                  : "border-transparent text-slate-500 hover:text-slate-700")
-              }
-            >
-              {t.label}
-              {t.id === "recommendations" &&
-                recommendations !== null &&
-                recommendations.length > 0 && (
-                  <span className="ml-1.5 rounded-full bg-slate-200 px-1.5 py-0.5 text-xs text-slate-600">
-                    {recommendations.length}
-                  </span>
-                )}
-            </button>
-          ))}
-        </div>
-
-        <section className="mt-6">
-          {tab === "recommendations" &&
-            (recommendations === null ? (
-              <p className="text-sm text-slate-500">Loading...</p>
-            ) : recommendations.length === 0 ? (
-              <p className="text-sm text-slate-500">No open recommendations.</p>
-            ) : (
-              <div className="space-y-3">
-                {recommendations.map((r) => (
-                  <div
-                    key={r.id}
-                    className="flex items-center justify-between rounded-xl border border-slate-200 bg-white p-4"
-                  >
-                    <p className="font-semibold">{formatType(r.type)}</p>
-                    <span className="font-semibold text-emerald-600">
-                      {currency.format(r.dollars_recoverable)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ))}
-
-          {tab === "assistant" && (
-            <>
-              <div className="flex items-center gap-1.5">
-                <span className="text-sm font-medium text-slate-700">Ask about this campaign</span>
-                <HintIcon text="Chat with AI about this campaign — get suggestions or ask it to update the budget, pause, or resume it. Changes are applied only after you confirm." />
-              </div>
-              <div className="mt-3">
-                <CampaignChat campaignId={campaigns?.[0]?.id ?? null} />
-              </div>
-            </>
-          )}
-
-          {tab === "messages" && <MessageThread clientId={clientId} />}
-        </section>
       </div>
+
+      {showIntake && (
+        <IntakeModal
+          existingClient={{
+            id: client.id,
+            name: client.name,
+            googleAdsCustomerId: client.google_ads_customer_id ?? undefined,
+          }}
+          onClose={() => {
+            setShowIntake(false);
+            setRefreshKey((k) => k + 1);
+          }}
+        />
+      )}
+
+      {showEdit && (
+        <EditClientModal
+          client={client}
+          onClose={() => setShowEdit(false)}
+          onSaved={() => {
+            setShowEdit(false);
+            setRefreshKey((k) => k + 1);
+          }}
+        />
+      )}
     </main>
   );
 }

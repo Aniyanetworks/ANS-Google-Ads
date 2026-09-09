@@ -11,29 +11,40 @@ type Message = {
   proposed_action: Record<string, unknown> | null;
   status: "new" | "drafted" | "approved" | "sent" | "dismissed";
   created_at: string;
+  campaigns: { campaign_name: string } | { campaign_name: string }[] | null;
 };
 
-export default function MessageThread({ clientId }: { clientId: string }) {
+export default function MessageThread({
+  clientId,
+  campaignId,
+}: {
+  clientId: string;
+  campaignId?: string;
+}) {
   const [messages, setMessages] = useState<Message[] | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [sendingId, setSendingId] = useState<string | null>(null);
 
   useEffect(() => {
     load();
-  }, [clientId]);
+  }, [clientId, campaignId]);
 
   async function load() {
-    const { data } = await supabase
+    let query = supabase
       .from("messages")
       .select(
-        "id, direction, from_email, subject, body, ai_draft_body, proposed_action, status, created_at"
+        "id, direction, from_email, subject, body, ai_draft_body, proposed_action, status, created_at, campaigns(campaign_name)"
       )
-      .eq("client_id", clientId)
-      .order("created_at", { ascending: true });
+      .eq("client_id", clientId);
 
-    setMessages(data ?? []);
+    if (campaignId) query = query.eq("campaign_id", campaignId);
+
+    const { data } = await query.order("created_at", { ascending: true });
+
+    const rows = (data ?? []) as unknown as Message[];
+    setMessages(rows);
     const nextDrafts: Record<string, string> = {};
-    for (const m of data ?? []) {
+    for (const m of rows) {
       if (m.status === "drafted" && m.ai_draft_body) nextDrafts[m.id] = m.ai_draft_body;
     }
     setDrafts(nextDrafts);
@@ -67,14 +78,29 @@ export default function MessageThread({ clientId }: { clientId: string }) {
 
   if (messages === null) return <p className="text-sm text-slate-500">Loading messages...</p>;
   if (messages.length === 0)
-    return <p className="text-sm text-slate-500">No messages from this client yet.</p>;
+    return (
+      <p className="text-sm text-slate-500">
+        {campaignId ? "No messages about this campaign yet." : "No messages from this client yet."}
+      </p>
+    );
 
   return (
     <div className="space-y-4">
-      {messages.map((m) => (
+      {messages.map((m) => {
+        const campaignName = Array.isArray(m.campaigns)
+          ? m.campaigns[0]?.campaign_name
+          : m.campaigns?.campaign_name;
+        return (
         <div key={m.id} className="rounded-xl border border-slate-200 bg-white p-4">
           <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>{m.direction === "inbound" ? m.from_email ?? "Client" : "Agency"}</span>
+            <span>
+              {m.direction === "inbound" ? m.from_email ?? "Client" : "Agency"}
+              {!campaignId && campaignName && (
+                <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-slate-600">
+                  {campaignName}
+                </span>
+              )}
+            </span>
             <span>{new Date(m.created_at).toLocaleString()}</span>
           </div>
           {m.subject && <p className="mt-1 text-sm font-medium text-slate-900">{m.subject}</p>}
@@ -111,7 +137,8 @@ export default function MessageThread({ clientId }: { clientId: string }) {
             <p className="mt-2 text-xs font-medium text-emerald-600">Sent</p>
           )}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

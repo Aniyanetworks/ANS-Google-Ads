@@ -14,22 +14,15 @@ const AD_SCHEDULES = ["24 Hours", "Business Hours (Mon-Fri 9am-6pm)", "Custom"];
 export default function IntakeForm({
   onSuccess,
   formRef,
+  existingClient,
 }: {
   onSuccess?: () => void;
   formRef?: RefObject<HTMLFormElement | null>;
+  existingClient?: { id: string; name: string; googleAdsCustomerId?: string };
 }) {
-  const [step, setStep] = useState<1 | 2>(1);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-
-  function goToStep2(e: React.MouseEvent<HTMLButtonElement>) {
-    const form = e.currentTarget.form;
-    // Step 2's fields are hidden (display:none) while on step 1, so
-    // reportValidity() here only checks step 1's visible required fields.
-    if (form && !form.reportValidity()) return;
-    setStep(2);
-  }
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -37,9 +30,31 @@ export default function IntakeForm({
     setError(null);
 
     const form = new FormData(e.currentTarget);
-    const clientId = crypto.randomUUID();
-    const campaignId = crypto.randomUUID();
 
+    if (!existingClient) {
+      const { error: clientError } = await supabase.from("clients").insert({
+        id: crypto.randomUUID(),
+        name: form.get("clientName"),
+        email: form.get("clientEmail"),
+        business_name: form.get("businessName"),
+        website_url: form.get("websiteUrl"),
+        phone: form.get("phone") || null,
+        google_ads_customer_id:
+          (form.get("googleAdsCustomerId") as string)?.replace(/[^0-9]/g, "") || null,
+      });
+
+      if (clientError) {
+        setError(clientError.message);
+        setSubmitting(false);
+        return;
+      }
+
+      setSubmitting(false);
+      setSuccess(true);
+      return;
+    }
+
+    const campaignId = crypto.randomUUID();
     const targetedLocations = (form.get("targetedLocations") as string)
       .split(",")
       .map((s) => s.trim())
@@ -49,24 +64,9 @@ export default function IntakeForm({
       .map((s) => s.trim())
       .filter(Boolean);
 
-    const { error: clientError } = await supabase.from("clients").insert({
-      id: clientId,
-      name: form.get("clientName"),
-      email: form.get("clientEmail"),
-      business_name: form.get("businessName"),
-      website_url: form.get("websiteUrl"),
-      phone: form.get("phone") || null,
-    });
-
-    if (clientError) {
-      setError(clientError.message);
-      setSubmitting(false);
-      return;
-    }
-
     const { error: campaignError } = await supabase.from("campaigns").insert({
       id: campaignId,
-      client_id: clientId,
+      client_id: existingClient.id,
       google_ads_customer_id:
         (form.get("googleAdsCustomerId") as string)?.replace(/[^0-9]/g, "") || null,
       campaign_name: form.get("campaignName"),
@@ -109,8 +109,14 @@ export default function IntakeForm({
   if (success) {
     return (
       <div className="py-10 text-center">
-        <h2 className="text-xl font-bold text-slate-900">Campaign request submitted</h2>
-        <p className="mt-2 text-slate-600">We'll be building this campaign shortly.</p>
+        <h2 className="text-xl font-bold text-slate-900">
+          {existingClient ? "Campaign request submitted" : "Client added"}
+        </h2>
+        <p className="mt-2 text-slate-600">
+          {existingClient
+            ? "We'll be building this campaign shortly."
+            : "Add a campaign for this client whenever you're ready."}
+        </p>
         {onSuccess && (
           <button
             onClick={onSuccess}
@@ -123,17 +129,9 @@ export default function IntakeForm({
     );
   }
 
-  return (
-    <form ref={formRef} onSubmit={handleSubmit} className="space-y-6">
-      <div className="flex items-center gap-2 text-sm font-medium text-slate-500">
-        <StepDot active={step === 1} done={step > 1} label="1" />
-        <span className={step === 1 ? "text-slate-900" : ""}>Business &amp; Client</span>
-        <span className="flex-1 border-t border-slate-200" />
-        <StepDot active={step === 2} done={false} label="2" />
-        <span className={step === 2 ? "text-slate-900" : ""}>Campaign Details</span>
-      </div>
-
-      <div className={step === 1 ? "space-y-4" : "hidden"}>
+  if (!existingClient) {
+    return (
+      <form ref={formRef} onSubmit={handleSubmit} className="space-y-6">
         <div className="grid grid-cols-2 gap-4">
           <Field label="Client's Name" name="clientName" required />
           <Field label="Client's Email" name="clientEmail" type="email" required />
@@ -152,39 +150,46 @@ export default function IntakeForm({
           />
         </div>
 
-        <button
-          type="button"
-          onClick={goToStep2}
-          className="w-full rounded-lg bg-slate-900 px-5 py-3 font-semibold text-white transition hover:bg-slate-700"
-        >
-          Next: Campaign Details
-        </button>
-      </div>
+        {error && <p className="text-sm text-red-600">{error}</p>}
 
-      <div className={step === 2 ? "space-y-4" : "hidden"}>
+        <button
+          type="submit"
+          disabled={submitting}
+          className="w-full rounded-lg bg-slate-900 px-5 py-3 font-semibold text-white transition hover:bg-slate-700 disabled:opacity-60"
+        >
+          {submitting ? "Submitting..." : "Create Client"}
+        </button>
+      </form>
+    );
+  }
+
+  return (
+    <form ref={formRef} onSubmit={handleSubmit} className="space-y-6">
+      <p className="text-sm font-medium text-slate-500">
+        New campaign for <span className="text-slate-900">{existingClient.name}</span>
+      </p>
+
+      <div className="space-y-4">
+        <Field
+          label="Google Ads Account ID"
+          name="googleAdsCustomerId"
+          placeholder="e.g. 123-456-7890"
+          defaultValue={existingClient.googleAdsCustomerId}
+          hint="Must already be linked under our MCC (Manager account) before a campaign can be built into it. Defaults to this client's existing account."
+        />
         <div className="grid grid-cols-2 gap-4">
-          <Field label="Campaign Name" name="campaignName" required={step === 2} />
+          <Field label="Campaign Name" name="campaignName" required />
           <Field
             label="Primary Keyword"
             name="primaryKeyword"
             placeholder="e.g. emergency plumber toronto"
-            required={step === 2}
+            required
           />
         </div>
 
         <div className="grid grid-cols-2 gap-4">
-          <Field
-            label="Campaign Goal"
-            name="campaignGoal"
-            placeholder="e.g. Leads"
-            required={step === 2}
-          />
-          <SelectField
-            label="Campaign Type"
-            name="campaignType"
-            options={CAMPAIGN_TYPES}
-            required={step === 2}
-          />
+          <Field label="Campaign Goal" name="campaignGoal" placeholder="e.g. Leads" required />
+          <SelectField label="Campaign Type" name="campaignType" options={CAMPAIGN_TYPES} required />
         </div>
 
         <div className="grid grid-cols-2 gap-4">
@@ -194,14 +199,9 @@ export default function IntakeForm({
             type="number"
             min="1"
             step="0.01"
-            required={step === 2}
+            required
           />
-          <SelectField
-            label="Bidding"
-            name="biddingStrategy"
-            options={BIDDING_STRATEGIES}
-            required={step === 2}
-          />
+          <SelectField label="Bidding" name="biddingStrategy" options={BIDDING_STRATEGIES} required />
         </div>
 
         <div className="grid grid-cols-2 gap-4">
@@ -209,56 +209,29 @@ export default function IntakeForm({
             label="Languages (comma-separated)"
             name="languages"
             defaultValue="English"
-            required={step === 2}
+            required
           />
           <Field
             label="Targeted Locations (comma-separated)"
             name="targetedLocations"
             placeholder="e.g. Cambridge, Kitchener, Waterloo"
-            required={step === 2}
+            required
           />
         </div>
 
-        <SelectField
-          label="Ad Schedule"
-          name="adSchedule"
-          options={AD_SCHEDULES}
-          required={step === 2}
-        />
+        <SelectField label="Ad Schedule" name="adSchedule" options={AD_SCHEDULES} required />
 
         {error && <p className="text-sm text-red-600">{error}</p>}
 
-        <div className="grid grid-cols-2 gap-4">
-          <button
-            type="button"
-            onClick={() => setStep(1)}
-            className="w-full rounded-lg border-2 border-slate-900 px-5 py-3 font-semibold text-slate-900 transition hover:bg-slate-900 hover:text-white"
-          >
-            Back
-          </button>
-          <button
-            type="submit"
-            disabled={submitting}
-            className="w-full rounded-lg bg-slate-900 px-5 py-3 font-semibold text-white transition hover:bg-slate-700 disabled:opacity-60"
-          >
-            {submitting ? "Submitting..." : "Submit Campaign Request"}
-          </button>
-        </div>
+        <button
+          type="submit"
+          disabled={submitting}
+          className="w-full rounded-lg bg-slate-900 px-5 py-3 font-semibold text-white transition hover:bg-slate-700 disabled:opacity-60"
+        >
+          {submitting ? "Submitting..." : "Submit Campaign Request"}
+        </button>
       </div>
     </form>
-  );
-}
-
-function StepDot({ active, done, label }: { active: boolean; done: boolean; label: string }) {
-  return (
-    <span
-      className={
-        "flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold " +
-        (active || done ? "bg-slate-900 text-white" : "bg-slate-200 text-slate-500")
-      }
-    >
-      {label}
-    </span>
   );
 }
 

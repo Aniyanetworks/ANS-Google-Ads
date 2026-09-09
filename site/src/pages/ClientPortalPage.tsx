@@ -9,12 +9,18 @@ type PortalRow = {
   body: string | null;
   status: string | null;
   created_at: string | null;
+  campaign_id: string | null;
+  campaign_name: string | null;
 };
+
+type CampaignOption = { id: string; campaign_name: string };
 
 export default function ClientPortalPage() {
   const { clientId } = useParams<{ clientId: string }>();
   const [businessName, setBusinessName] = useState<string | null>(null);
   const [messages, setMessages] = useState<PortalRow[] | null>(null);
+  const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string>("");
   const [notFound, setNotFound] = useState(false);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -42,6 +48,15 @@ export default function ClientPortalPage() {
     const rows = data as PortalRow[];
     setBusinessName(rows[0].business_name);
     setMessages(rows.filter((r) => r.message_id !== null));
+
+    const { data: campaignRows } = await supabase.rpc("get_client_campaigns", {
+      p_client_id: clientId,
+    });
+    const options = (campaignRows as CampaignOption[]) ?? [];
+    setCampaigns(options);
+    setSelectedCampaignId((prev) =>
+      prev && options.some((c) => c.id === prev) ? prev : options[0]?.id ?? ""
+    );
   }
 
   async function sendMessage() {
@@ -51,7 +66,11 @@ export default function ClientPortalPage() {
     setInput("");
 
     const { data, error } = await supabase
-      .rpc("insert_client_message", { p_client_id: clientId, p_body: text })
+      .rpc("insert_client_message", {
+        p_client_id: clientId,
+        p_body: text,
+        p_campaign_id: selectedCampaignId || null,
+      })
       .single();
 
     if (!error && data) {
@@ -103,8 +122,13 @@ export default function ClientPortalPage() {
             {messages?.map((m) => (
               <div
                 key={m.message_id}
-                className={m.direction === "inbound" ? "flex justify-end" : "flex justify-start"}
+                className={
+                  "flex flex-col " + (m.direction === "inbound" ? "items-end" : "items-start")
+                }
               >
+                {campaigns.length > 1 && m.campaign_name && (
+                  <span className="mb-1 px-1 text-xs text-slate-400">{m.campaign_name}</span>
+                )}
                 <div
                   className={
                     m.direction === "inbound"
@@ -119,7 +143,26 @@ export default function ClientPortalPage() {
             <div ref={bottomRef} />
           </div>
 
-          <div className="flex gap-2 border-t border-slate-200 p-3">
+          {campaigns.length > 1 && (
+            <div className="border-t border-slate-200 px-3 pt-3">
+              <label className="mb-1 block text-xs font-medium text-slate-500">
+                Which campaign is this about?
+              </label>
+              <select
+                value={selectedCampaignId}
+                onChange={(e) => setSelectedCampaignId(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-slate-900 focus:outline-none"
+              >
+                {campaigns.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.campaign_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className={"flex gap-2 p-3 " + (campaigns.length > 1 ? "" : "border-t border-slate-200")}>
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}

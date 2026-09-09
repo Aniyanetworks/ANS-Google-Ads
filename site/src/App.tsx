@@ -4,6 +4,8 @@ import LoginPage from "./pages/LoginPage";
 import IntakePage from "./pages/IntakePage";
 import DashboardPage from "./pages/DashboardPage";
 import ClientDetailPage from "./pages/ClientDetailPage";
+import CampaignDetailPage from "./pages/CampaignDetailPage";
+import ClientMessagesPage from "./pages/ClientMessagesPage";
 import AccountPage from "./pages/AccountPage";
 import SettingsPage from "./pages/SettingsPage";
 import ClientPortalPage from "./pages/ClientPortalPage";
@@ -29,6 +31,22 @@ export default function App() {
           element={
             <ProtectedRoute>
               <ClientDetailPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/dashboard/clients/:clientId/campaigns/:campaignId"
+          element={
+            <ProtectedRoute>
+              <CampaignDetailPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/dashboard/clients/:clientId/messages"
+          element={
+            <ProtectedRoute>
+              <ClientMessagesPage />
             </ProtectedRoute>
           }
         />

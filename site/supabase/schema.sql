@@ -25,6 +25,12 @@ create table if not exists clients (
   business_name text not null,
   website_url text,
   phone text,
+  -- The Google Ads account this client is linked to under our MCC. Lives
+  -- here (not just on campaigns.google_ads_customer_id) so it's known
+  -- before the client has any campaigns at all, and so "+ Add Campaign"
+  -- can prefill it without needing an existing campaign row to read it
+  -- from.
+  google_ads_customer_id text,
   created_at timestamptz not null default now()
 );
 
@@ -33,8 +39,12 @@ create table if not exists campaigns (
   client_id uuid not null references clients(id) on delete cascade,
   google_ads_customer_id text,
   campaign_name text not null,
-  primary_keyword text not null,
-  goal text not null,
+  -- primary_keyword/goal are intake-form concepts; nullable because
+  -- sync-metrics.json's campaign-discovery step also inserts rows for
+  -- campaigns that exist in Google Ads but were never built through this
+  -- app's intake flow, where neither concept applies.
+  primary_keyword text,
+  goal text,
   campaign_type text not null default 'Search',
   daily_budget_usd numeric not null,
   bidding_strategy text not null default 'Maximize Clicks',
@@ -116,20 +126,40 @@ returns table (
   direction text,
   body text,
   status text,
-  created_at timestamptz
+  created_at timestamptz,
+  campaign_id uuid,
+  campaign_name text
 )
 language sql
 security definer
 set search_path = public
 as $$
-  select c.business_name, m.id, m.direction, m.body, m.status, m.created_at
+  select c.business_name, m.id, m.direction, m.body, m.status, m.created_at,
+         cam.id, cam.campaign_name
   from clients c
   left join messages m on m.client_id = c.id
+  left join campaigns cam on cam.id = m.campaign_id
   where c.id = p_client_id
   order by m.created_at asc;
 $$;
 
-create or replace function insert_client_message(p_client_id uuid, p_body text)
+-- Feeds the campaign picker in the portal (only shown when a client has
+-- more than one campaign, so they can say which one a message is about —
+-- otherwise the AI draft workflow has no way to know which of the client's
+-- campaigns an inbound message refers to).
+create or replace function get_client_campaigns(p_client_id uuid)
+returns table (id uuid, campaign_name text)
+language sql
+security definer
+set search_path = public
+as $$
+  select id, campaign_name
+  from campaigns
+  where client_id = p_client_id
+  order by created_at asc;
+$$;
+
+create or replace function insert_client_message(p_client_id uuid, p_body text, p_campaign_id uuid default null)
 returns messages
 language plpgsql
 security definer
@@ -144,15 +174,21 @@ begin
   if p_body is null or trim(p_body) = '' then
     raise exception 'empty message';
   end if;
-  insert into messages (client_id, direction, channel, body, status)
-  values (p_client_id, 'inbound', 'in_app', trim(p_body), 'new')
+  if p_campaign_id is not null and not exists (
+    select 1 from campaigns where id = p_campaign_id and client_id = p_client_id
+  ) then
+    raise exception 'campaign does not belong to this client';
+  end if;
+  insert into messages (client_id, campaign_id, direction, channel, body, status)
+  values (p_client_id, p_campaign_id, 'inbound', 'in_app', trim(p_body), 'new')
   returning * into new_row;
   return new_row;
 end;
 $$;
 
 grant execute on function get_client_portal_data(uuid) to anon;
-grant execute on function insert_client_message(uuid, text) to anon;
+grant execute on function get_client_campaigns(uuid) to anon;
+grant execute on function insert_client_message(uuid, text, uuid) to anon;
 
 -- Agency <-> AI chat for managing a campaign directly (distinct from
 -- `messages`, which is now client in-app correspondence, not email). The

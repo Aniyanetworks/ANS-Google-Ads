@@ -91,8 +91,7 @@
       "parameters": {
         "operation": "getAll",
         "tableId": "campaigns",
-        "returnAll": false,
-        "limit": 1,
+        "returnAll": true,
         "filters": {
           "conditions": [
             {
@@ -117,7 +116,7 @@
         }
       },
       "alwaysOutputData": true,
-      "notes": "A client with no campaign yet is a real, expected case."
+      "notes": "Fetches ALL of the client's campaigns (not just one) so 'Build AI context' can pick the exact campaign the client selected in the portal (message.campaign_id), instead of guessing whichever campaign Supabase happened to return first for a multi-campaign client."
     },
     {
       "parameters": {
@@ -129,7 +128,7 @@
           "conditions": [
             {
               "keyName": "campaign_id",
-              "keyValue": "={{ $('Get campaign').item.json.id }}"
+              "keyValue": "={{ $('Resolve campaign').item.json.id }}"
             }
           ]
         }
@@ -161,7 +160,7 @@
           "conditions": [
             {
               "keyName": "campaign_id",
-              "keyValue": "={{ $('Get campaign').item.json.id }}"
+              "keyValue": "={{ $('Resolve campaign').item.json.id }}"
             },
             {
               "keyName": "status",
@@ -188,7 +187,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const message = $('Get message').item.json;\nconst client = $('Get client').item.json;\nconst campaignRows = $('Get campaign').all().map(i => i.json);\nconst campaign = campaignRows[0] || null;\nconst metricsRows = $('Get campaign metrics').all().map(i => i.json).filter(m => m && m.id);\nconst recRows = $('Get open recommendations').all().map(i => i.json).filter(r => r && r.id);\n\nconst totals = metricsRows.reduce((acc, m) => {\n  acc.cost += Number(m.cost || 0);\n  acc.conversions += Number(m.conversions || 0);\n  acc.conversionsValue += Number(m.conversions_value || 0);\n  return acc;\n}, { cost: 0, conversions: 0, conversionsValue: 0 });\n\nconst recsText = recRows.length\n  ? recRows.map(r => '- ' + r.type + ': $' + r.dollars_recoverable + ' recoverable').join('\\n')\n  : 'None currently open.';\n\nreturn [{\n  json: {\n    businessName: client.business_name,\n    campaignId: campaign ? campaign.id : null,\n    campaignName: campaign ? campaign.campaign_name : 'none yet',\n    campaignStatus: campaign ? campaign.status : 'n/a',\n    dailyBudgetUsd: campaign ? campaign.daily_budget_usd : null,\n    totalCost: totals.cost,\n    totalConversions: totals.conversions,\n    totalConversionsValue: totals.conversionsValue,\n    roas: totals.cost > 0 ? totals.conversionsValue / totals.cost : null,\n    recommendationsText: recsText,\n    clientMessage: message.body,\n  },\n}];\n"
+        "jsCode": "const message = $('Get message').item.json;\nconst client = $('Get client').item.json;\nconst resolved = $('Resolve campaign').item.json;\nconst campaign = resolved && resolved.id ? resolved : null;\nconst metricsRows = $('Get campaign metrics').all().map(i => i.json).filter(m => m && m.id);\nconst recRows = $('Get open recommendations').all().map(i => i.json).filter(r => r && r.id);\n\nconst totals = metricsRows.reduce((acc, m) => {\n  acc.cost += Number(m.cost || 0);\n  acc.conversions += Number(m.conversions || 0);\n  acc.conversionsValue += Number(m.conversions_value || 0);\n  return acc;\n}, { cost: 0, conversions: 0, conversionsValue: 0 });\n\nconst recsText = recRows.length\n  ? recRows.map(r => '- ' + r.type + ': $' + r.dollars_recoverable + ' recoverable').join('\\n')\n  : 'None currently open.';\n\nreturn [{\n  json: {\n    businessName: client.business_name,\n    campaignId: campaign ? campaign.id : null,\n    campaignName: campaign ? campaign.campaign_name : 'none yet',\n    campaignStatus: campaign ? campaign.status : 'n/a',\n    dailyBudgetUsd: campaign ? campaign.daily_budget_usd : null,\n    totalCost: totals.cost,\n    totalConversions: totals.conversions,\n    totalConversionsValue: totals.conversionsValue,\n    roas: totals.cost > 0 ? totals.conversionsValue / totals.cost : null,\n    recommendationsText: recsText,\n    clientMessage: message.body,\n  },\n}];\n"
       },
       "id": "build-context-1",
       "name": "Build AI context",
@@ -197,7 +196,8 @@
       "position": [
         1120,
         300
-      ]
+      ],
+      "notes": "Picks the campaign the client actually selected in the portal (message.campaign_id, set by get_client_campaigns/insert_client_message) when present; falls back to the client's first campaign only for older messages sent before the portal had a campaign picker, or clients with exactly one campaign."
     },
     {
       "parameters": {
@@ -318,6 +318,20 @@
         300
       ],
       "notes": "Replace with your actual Slack/Email node."
+    },
+    {
+      "parameters": {
+        "jsCode": "const message = $('Get message').item.json;\nconst campaignRows = $input.all().map(i => i.json);\nconst campaign = (message.campaign_id && campaignRows.find(c => c.id === message.campaign_id)) || campaignRows[0] || null;\nreturn [{ json: campaign || {} }];\n"
+      },
+      "id": "resolve-campaign-1",
+      "name": "Resolve campaign",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        380
+      ],
+      "notes": "Reduces 'Get campaign' (now every campaign belonging to the client) down to the ONE campaign this message is actually about — message.campaign_id when the client picked one in the portal, otherwise the client's first campaign (single-campaign clients, or older messages sent before the portal had a picker). Keeps exactly one item flowing through the rest of the webhook execution, same as before 'Get campaign' returned all rows instead of just one."
     }
   ],
   "connections": {
@@ -369,7 +383,7 @@
       "main": [
         [
           {
-            "node": "Get campaign metrics",
+            "node": "Resolve campaign",
             "type": "main",
             "index": 0
           }
@@ -447,6 +461,17 @@
         [
           {
             "node": "Notify: needs review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve campaign": {
+      "main": [
+        [
+          {
+            "node": "Get campaign metrics",
             "type": "main",
             "index": 0
           }

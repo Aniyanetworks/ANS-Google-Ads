@@ -1,7 +1,13 @@
 import { useEffect } from "react";
 import IntakeForm from "./IntakeForm";
 
-export default function IntakeModal({ onClose }: { onClose: () => void }) {
+export default function IntakeModal({
+  onClose,
+  existingClient,
+}: {
+  onClose: () => void;
+  existingClient?: { id: string; name: string; googleAdsCustomerId?: string };
+}) {
   useEffect(() => {
     function handleEscape(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -25,10 +31,12 @@ export default function IntakeModal({ onClose }: { onClose: () => void }) {
         <div className="mb-6 flex items-start justify-between">
           <div>
             <h2 id="intake-modal-title" className="text-xl font-bold text-slate-900">
-              New Campaign Intake
+              {existingClient ? "New Campaign" : "New Client"}
             </h2>
             <p className="mt-1 text-sm text-slate-600">
-              Submit client and campaign details to kick off a new build.
+              {existingClient
+                ? `Add another campaign for ${existingClient.name}.`
+                : "Add a new client's business details."}
             </p>
           </div>
           <button
@@ -42,7 +50,7 @@ export default function IntakeModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <IntakeForm onSuccess={onClose} />
+        <IntakeForm onSuccess={onClose} existingClient={existingClient} />
       </div>
     </div>
   );

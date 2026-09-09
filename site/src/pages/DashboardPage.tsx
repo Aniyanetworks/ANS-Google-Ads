@@ -3,14 +3,19 @@ import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import IntakeModal from "../components/IntakeModal";
 import ConfirmDialog from "../components/ConfirmDialog";
+import EditClientModal from "../components/EditClientModal";
 
 type ClientRow = {
   id: string;
   name: string;
+  email: string;
   business_name: string;
+  website_url: string | null;
+  phone: string | null;
   campaignCount: number;
   primaryCampaignId: string | null;
   status: string | null;
+  google_ads_customer_id: string | null;
   cost: number;
   conversionsValue: number;
   roas: number | null;
@@ -26,12 +31,14 @@ export default function DashboardPage() {
   const [showIntake, setShowIntake] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [pendingDelete, setPendingDelete] = useState<ClientRow | null>(null);
+  const [editingClient, setEditingClient] = useState<ClientRow | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
     async function load() {
       const { data: clientRows, error: clientsError } = await supabase
         .from("clients")
-        .select("id, name, business_name")
+        .select("id, name, email, business_name, website_url, phone, google_ads_customer_id")
         .order("created_at", { ascending: false });
 
       if (clientsError) {
@@ -41,7 +48,7 @@ export default function DashboardPage() {
 
       const { data: campaignRows, error: campaignsError } = await supabase
         .from("campaigns")
-        .select("id, client_id, status");
+        .select("id, client_id, status, google_ads_customer_id");
 
       if (campaignsError) {
         setError(campaignsError.message);
@@ -86,10 +93,15 @@ export default function DashboardPage() {
         return {
           id: client.id,
           name: client.name,
+          email: client.email,
           business_name: client.business_name,
+          website_url: client.website_url,
+          phone: client.phone,
           campaignCount: campaigns.length,
           primaryCampaignId: campaigns[0]?.id ?? null,
           status: campaigns[0]?.status ?? null,
+          google_ads_customer_id:
+            client.google_ads_customer_id ?? campaigns[0]?.google_ads_customer_id ?? null,
           cost: totals.cost,
           conversionsValue: totals.value,
           roas: totals.cost > 0 ? totals.value / totals.cost : null,
@@ -140,6 +152,30 @@ export default function DashboardPage() {
     setRefreshKey((k) => k + 1);
   }
 
+  async function handleSyncNow() {
+    const webhookUrl = import.meta.env.VITE_N8N_SYNC_NOW_WEBHOOK_URL;
+    if (!webhookUrl) {
+      window.alert("VITE_N8N_SYNC_NOW_WEBHOOK_URL isn't configured — sync can't be triggered from here yet.");
+      return;
+    }
+
+    setSyncing(true);
+    try {
+      await fetch(webhookUrl, { method: "POST" });
+    } catch {
+      // The workflow may still be running server-side even if this fetch
+      // itself failed to complete — reload regardless below.
+    }
+
+    // The webhook acknowledges immediately and the actual sync (several
+    // Google Ads API calls per campaign) keeps running in the background,
+    // so this is a best-effort wait, not a guarantee it's finished.
+    setTimeout(() => {
+      setRefreshKey((k) => k + 1);
+      setSyncing(false);
+    }, 8000);
+  }
+
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10 text-slate-900">
       <div className="mx-auto max-w-6xl">
@@ -162,6 +198,13 @@ export default function DashboardPage() {
               Account
             </Link>
             <button
+              onClick={handleSyncNow}
+              disabled={syncing}
+              className="rounded-lg border-2 border-slate-900 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-900 hover:text-white disabled:opacity-60"
+            >
+              {syncing ? "Syncing..." : "Sync Now"}
+            </button>
+            <button
               onClick={async () => {
                 await supabase.auth.signOut();
                 window.location.href = "/login";
@@ -174,7 +217,7 @@ export default function DashboardPage() {
               onClick={() => setShowIntake(true)}
               className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700"
             >
-              + New Campaign
+              + New Client
             </button>
           </div>
         </div>
@@ -198,6 +241,7 @@ export default function DashboardPage() {
                 <tr>
                   <th className="px-4 py-3">Client</th>
                   <th className="px-4 py-3">Campaigns</th>
+                  <th className="px-4 py-3">Customer ID</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Cost</th>
                   <th className="px-4 py-3">Conv. Value</th>
@@ -218,6 +262,7 @@ export default function DashboardPage() {
                       <p className="text-xs text-slate-500">{c.business_name}</p>
                     </td>
                     <td className="px-4 py-3">{c.campaignCount}</td>
+                    <td className="px-4 py-3 text-slate-500">{c.google_ads_customer_id ?? "—"}</td>
                     <td className="px-4 py-3 text-slate-500">{c.status ?? "—"}</td>
                     <td className="px-4 py-3">{currency.format(c.cost)}</td>
                     <td className="px-4 py-3">{currency.format(c.conversionsValue)}</td>
@@ -239,6 +284,12 @@ export default function DashboardPage() {
                           </button>
                         )}
                         <button
+                          onClick={() => setEditingClient(c)}
+                          className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                        >
+                          Edit
+                        </button>
+                        <button
                           onClick={() => setPendingDelete(c)}
                           className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50"
                         >
@@ -258,6 +309,17 @@ export default function DashboardPage() {
         <IntakeModal
           onClose={() => {
             setShowIntake(false);
+            setRefreshKey((k) => k + 1);
+          }}
+        />
+      )}
+
+      {editingClient && (
+        <EditClientModal
+          client={editingClient}
+          onClose={() => setEditingClient(null)}
+          onSaved={() => {
+            setEditingClient(null);
             setRefreshKey((k) => k + 1);
           }}
         />

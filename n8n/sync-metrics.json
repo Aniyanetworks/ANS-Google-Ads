@@ -4,7 +4,12 @@
       "parameters": {
         "rule": {
           "interval": [
-            {}
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 6,
+              "triggerAtMinute": 0
+            }
           ]
         }
       },
@@ -16,7 +21,7 @@
         -896,
         1456
       ],
-      "notes": "Fires once a day (default n8n Schedule Trigger UI defaults to midnight in the instance's timezone — adjust in the node if you want a specific hour)."
+      "notes": "Fires the full sync + MCC account/campaign discovery chain automatically once a day at 6:00 AM server time (was previously an empty/unset interval, which likely wasn't firing reliably). Change daysInterval/triggerAtHour here, or edit directly in n8n's UI, to adjust the cadence."
     },
     {
       "parameters": {
@@ -98,7 +103,8 @@
           "name": "Supabase Google Ads"
         }
       },
-      "notes": "Unverified: returnAll + filterType 'none' for a multi-row table (only used for the single-row google_ads_settings table elsewhere this session)."
+      "notes": "Confirmed live: zero campaigns (a fresh/empty campaigns table) halted the ENTIRE workflow here, including the unrelated MCC account-discovery branch downstream (Get all clients -> Get MCC accounts -> ...) since n8n stops executing when a node has no output data by default. alwaysOutputData fixes this the same way it was already fixed on 'Delete existing metrics row' and 'Delete existing open recommendations' elsewhere in this workflow. The single placeholder item this produces on a truly empty table is already handled safely by every downstream consumer (Filter buildable campaigns, Get distinct customers, Filter unknown accounts) since they all skip rows missing google_ads_customer_id.",
+      "alwaysOutputData": true
     },
     {
       "parameters": {
@@ -193,31 +199,31 @@
           "fieldValues": [
             {
               "fieldId": "campaign_id",
-              "fieldValue": "={{ $('Build metrics row').item.json.campaign_id }}"
+              "fieldValue": "={{ $('Build metrics row').all()[$itemIndex].json.campaign_id }}"
             },
             {
               "fieldId": "date",
-              "fieldValue": "={{ $('Build metrics row').item.json.date }}"
+              "fieldValue": "={{ $('Build metrics row').all()[$itemIndex].json.date }}"
             },
             {
               "fieldId": "cost",
-              "fieldValue": "={{ $('Build metrics row').item.json.cost }}"
+              "fieldValue": "={{ $('Build metrics row').all()[$itemIndex].json.cost }}"
             },
             {
               "fieldId": "conversions",
-              "fieldValue": "={{ $('Build metrics row').item.json.conversions }}"
+              "fieldValue": "={{ $('Build metrics row').all()[$itemIndex].json.conversions }}"
             },
             {
               "fieldId": "conversions_value",
-              "fieldValue": "={{ $('Build metrics row').item.json.conversions_value }}"
+              "fieldValue": "={{ $('Build metrics row').all()[$itemIndex].json.conversions_value }}"
             },
             {
               "fieldId": "impressions",
-              "fieldValue": "={{ $('Build metrics row').item.json.impressions }}"
+              "fieldValue": "={{ $('Build metrics row').all()[$itemIndex].json.impressions }}"
             },
             {
               "fieldId": "clicks",
-              "fieldValue": "={{ $('Build metrics row').item.json.clicks }}"
+              "fieldValue": "={{ $('Build metrics row').all()[$itemIndex].json.clicks }}"
             }
           ]
         }
@@ -248,7 +254,7 @@
             {
               "keyName": "campaign_id",
               "condition": "eq",
-              "keyValue": "={{ $('Filter buildable campaigns').item.json.campaignRowId }}"
+              "keyValue": "={{ $('Filter buildable campaigns').all()[$itemIndex].json.campaignRowId }}"
             },
             {
               "keyName": "status",
@@ -630,6 +636,269 @@
           "name": "Manam- OpenAi account"
         }
       }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json);\nconst DIRECT_ACCESS_CUSTOMER_IDS = ['3534195221'];\nconst mccCustomerId = $('Get Google Ads credentials').first().json.mcc_customer_id;\nconst byCustomer = new Map();\n\nfor (const row of rows) {\n  if (!row.google_ads_customer_id) continue;\n  const customerId = String(row.google_ads_customer_id).replace(/[^0-9]/g, '');\n  if (!byCustomer.has(customerId)) {\n    byCustomer.set(customerId, {\n      customerId,\n      clientIds: new Set(),\n      loginCustomerId: DIRECT_ACCESS_CUSTOMER_IDS.includes(customerId) ? '' : mccCustomerId,\n      knownResources: [],\n    });\n  }\n  const entry = byCustomer.get(customerId);\n  entry.clientIds.add(row.client_id);\n  if (row.google_ads_campaign_resource) {\n    entry.knownResources.push(row.google_ads_campaign_resource);\n  }\n}\n\n// A customer_id shared by more than one client is ambiguous — a newly\n// discovered campaign for it can't be safely attributed to either one, so\n// skip discovery for it entirely rather than guessing. (This happened for\n// real: two test clients briefly shared one Google Ads account, and 5\n// campaigns got silently misattributed as a result before this guard.)\nconst out = [];\nfor (const entry of byCustomer.values()) {\n  if (entry.clientIds.size > 1) continue;\n  out.push({\n    json: {\n      customerId: entry.customerId,\n      clientId: [...entry.clientIds][0],\n      loginCustomerId: entry.loginCustomerId,\n      knownResources: entry.knownResources,\n    },\n  });\n}\nreturn out;\n"
+      },
+      "id": "get-distinct-customers-1",
+      "name": "Get distinct customers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        1000
+      ],
+      "notes": "One item per distinct google_ads_customer_id already known to Supabase, carrying every already-tracked campaign resource name so 'Filter new campaigns' can tell what's genuinely new vs. already imported. Skips any customer_id shared by more than one client entirely, rather than guessing which client owns a newly-discovered campaign for it — confirmed live that guessing wrong is a real failure mode, not just theoretical."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $json.customerId }}/googleAds:search",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $json.loginCustomerId\n    ? { \"login-customer-id\": $json.loginCustomerId }\n    : {}\n)) }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: `SELECT campaign.id, campaign.name, campaign.status, campaign.resource_name, campaign_budget.amount_micros, campaign_budget.resource_name FROM campaign WHERE campaign.status != 'REMOVED'` }) }}",
+        "options": {}
+      },
+      "id": "discover-campaigns-1",
+      "name": "Discover campaigns",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        1000
+      ],
+      "notes": "Pulls EVERY campaign Google Ads has for this customer, not just ones built through this app — this is what lets the dashboard show campaigns created directly in the Google Ads UI too."
+    },
+    {
+      "parameters": {
+        "jsCode": "function safeAll(nodeName) {\n  try {\n    return $(nodeName).all();\n  } catch (e) {\n    return [];\n  }\n}\n\nconst customers = [...safeAll('Get distinct customers'), ...safeAll('Prepare for campaign discovery')];\nconst searches = $input.all();\nconst statusMap = { ENABLED: 'active', PAUSED: 'paused' };\nconst output = [];\n\ncustomers.forEach((c, i) => {\n  const { customerId, clientId, knownResources } = c.json;\n  const results = (searches[i] && searches[i].json.results) || [];\n  for (const r of results) {\n    const resourceName = r.campaign.resourceName;\n    if (!resourceName || knownResources.includes(resourceName)) continue;\n    output.push({\n      json: {\n        clientId,\n        customerId,\n        campaignName: r.campaign.name,\n        status: statusMap[r.campaign.status] || 'paused',\n        dailyBudgetUsd: Number((r.campaignBudget && r.campaignBudget.amountMicros) || 0) / 1000000,\n        campaignResource: resourceName,\n        budgetResource: (r.campaignBudget && r.campaignBudget.resourceName) || null,\n      },\n    });\n  }\n});\n\nreturn output;\n"
+      },
+      "id": "filter-new-campaigns-1",
+      "name": "Filter new campaigns",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        1000
+      ],
+      "notes": "'Discover campaigns' has two upstream sources (existing-customer discovery via 'Get distinct customers', and whole-account discovery via 'Prepare for campaign discovery') but only ONE of them actually executes on any given run — whichever branch produced items. Referencing the node that did NOT run via $('NodeName').all() throws 'Node X hasn't been executed', not an empty array, so both lookups go through safeAll() to tolerate either branch being idle."
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "campaigns",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "client_id",
+              "fieldValue": "={{ $json.clientId }}"
+            },
+            {
+              "fieldId": "google_ads_customer_id",
+              "fieldValue": "={{ $json.customerId }}"
+            },
+            {
+              "fieldId": "campaign_name",
+              "fieldValue": "={{ $json.campaignName }}"
+            },
+            {
+              "fieldId": "daily_budget_usd",
+              "fieldValue": "={{ $json.dailyBudgetUsd }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "={{ $json.status }}"
+            },
+            {
+              "fieldId": "google_ads_campaign_resource",
+              "fieldValue": "={{ $json.campaignResource }}"
+            },
+            {
+              "fieldId": "google_ads_budget_resource",
+              "fieldValue": "={{ $json.budgetResource }}"
+            }
+          ]
+        }
+      },
+      "id": "insert-discovered-1",
+      "name": "Insert discovered campaign",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        920,
+        1000
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "primary_keyword/goal are intentionally left unset (now nullable) — those are intake-form concepts that don't apply to a campaign nobody built through this app. Shows up on the dashboard exactly like any other campaign once inserted; the next sync run's metrics/recommendations/config branches will pick it up too since they iterate every campaign with a google_ads_campaign_resource, not just ones from the intake flow."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Get Google Ads credentials').item.json.mcc_customer_id }}/googleAds:search",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify({\n  \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n  \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n  \"login-customer-id\": $('Get Google Ads credentials').item.json.mcc_customer_id,\n  \"Content-Type\": \"application/json\"\n}) }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: `SELECT customer_client.id, customer_client.descriptive_name FROM customer_client WHERE customer_client.manager = false AND customer_client.status = 'ENABLED'` }) }}",
+        "options": {}
+      },
+      "id": "get-mcc-accounts-1",
+      "name": "Get MCC accounts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        700
+      ],
+      "notes": "Asks the MCC directly what real, enabled client accounts it manages — not derived from anything already in Supabase. This is what catches an account like a newly-linked client that has no clients/campaigns row yet at all."
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $('Get all campaigns').all().map(i => i.json);\nconst knownCustomerIdsFromCampaigns = new Set(\n  rows.filter(r => r.google_ads_customer_id).map(r => String(r.google_ads_customer_id).replace(/[^0-9]/g, ''))\n);\n\nconst clients = $('Get all clients').all().map(i => i.json);\nconst existingClientByCustomerId = new Map();\nfor (const c of clients) {\n  const m = /^googleads-(\\d+)@discovered\\.local$/.exec(c.email || '');\n  if (m) existingClientByCustomerId.set(m[1], c.id);\n}\n\nconst mccCustomerId = $('Get Google Ads credentials').first().json.mcc_customer_id;\nconst results = $json.results || [];\n\nreturn results\n  .filter(r => !knownCustomerIdsFromCampaigns.has(String(r.customerClient.id)))\n  .map(r => {\n    const customerId = String(r.customerClient.id);\n    return {\n      json: {\n        customerId,\n        descriptiveName: r.customerClient.descriptiveName || ('Google Ads ' + customerId),\n        loginCustomerId: mccCustomerId,\n        existingClientId: existingClientByCustomerId.get(customerId) || null,\n      },\n    };\n  });\n"
+      },
+      "id": "filter-unknown-accounts-1",
+      "name": "Filter unknown accounts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        700
+      ],
+      "notes": "Keeps only MCC-managed accounts with zero campaigns rows in Supabase. For each one, also checks whether a client row already exists for it (matched via the googleads-<id>@discovered.local placeholder email pattern 'Create client for discovered account' uses) — existingClientId is set if so, so 'Client already exists?' downstream can skip creating a duplicate and just retry campaign discovery for the existing client instead."
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "clients",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $json.descriptiveName }}"
+            },
+            {
+              "fieldId": "business_name",
+              "fieldValue": "={{ $json.descriptiveName }}"
+            },
+            {
+              "fieldId": "email",
+              "fieldValue": "={{ 'googleads-' + $json.customerId + '@discovered.local' }}"
+            }
+          ]
+        }
+      },
+      "id": "create-discovered-client-1",
+      "name": "Create client for discovered account",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        920,
+        620
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Auto-onboards a real Google Ads account found under the MCC as a client row so its campaigns have somewhere to attach to. The email is a clearly-fake placeholder (googleads-<id>@discovered.local) since there's no real contact info to use — there's no 'edit client' UI yet, so replace it directly in Supabase once you know who this account actually belongs to."
+    },
+    {
+      "parameters": {
+        "jsCode": "const source = $('Filter unknown accounts').item.json;\nconst clientId = source.existingClientId || $json.id;\nreturn [{\n  json: {\n    customerId: source.customerId,\n    clientId,\n    loginCustomerId: source.loginCustomerId,\n    knownResources: [],\n  },\n}];\n"
+      },
+      "id": "merge-for-discovery-1",
+      "name": "Prepare for campaign discovery",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1140,
+        700
+      ],
+      "notes": "Reshapes into the same {customerId, clientId, loginCustomerId, knownResources} shape 'Get distinct customers' produces. clientId prefers source.existingClientId (set when a client already existed for this account) over $json.id (the freshly-created client row's id) — covers both the 'brand new account' and 'client exists, campaigns just never got discovered' cases with one node."
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sync-now",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "sync-now-webhook-1",
+      "name": "Sync Now Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -896,
+        1200
+      ],
+      "webhookId": "sync-now",
+      "notes": "Called by the dashboard's \"Sync Now\" button. Runs the exact same flow as the daily Schedule Trigger — both feed into \"Get Google Ads credentials\". Responds immediately (onReceived) rather than waiting for the whole sync to finish, since this can involve several Google Ads API calls per campaign; the dashboard just reloads its data a few seconds after firing this, best-effort."
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "clients",
+        "returnAll": true,
+        "filterType": "none"
+      },
+      "id": "get-all-clients-1",
+      "name": "Get all clients",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        40,
+        700
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Needed so 'Filter unknown accounts' can recognize an account that already has a client row but zero campaigns yet (e.g. a previous sync created the client but discovery failed before finding its campaigns) — without this, every such account would get a DUPLICATE client row created on every subsequent sync, since the old check only looked at campaigns.google_ads_customer_id. Also needs alwaysOutputData: true for the same reason as 'Get all campaigns' above — zero clients (a fresh/empty clients table) would otherwise halt the workflow here too, before 'Get MCC accounts' ever runs. The placeholder item this produces on an empty table is already handled safely (Filter unknown accounts only matches clients whose email fits the googleads-<id>@discovered.local pattern).",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ !!$json.existingClientId }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "client-exists-if-1",
+      "name": "Client already exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        700,
+        700
+      ]
     }
   ],
   "connections": {
@@ -671,6 +940,16 @@
         [
           {
             "node": "Filter buildable campaigns",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get distinct customers",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get all clients",
             "type": "main",
             "index": 0
           }
@@ -869,6 +1148,123 @@
           {
             "node": "Suggest (AI Agent)",
             "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get distinct customers": {
+      "main": [
+        [
+          {
+            "node": "Discover campaigns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Discover campaigns": {
+      "main": [
+        [
+          {
+            "node": "Filter new campaigns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter new campaigns": {
+      "main": [
+        [
+          {
+            "node": "Insert discovered campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get MCC accounts": {
+      "main": [
+        [
+          {
+            "node": "Filter unknown accounts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter unknown accounts": {
+      "main": [
+        [
+          {
+            "node": "Client already exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create client for discovered account": {
+      "main": [
+        [
+          {
+            "node": "Prepare for campaign discovery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare for campaign discovery": {
+      "main": [
+        [
+          {
+            "node": "Discover campaigns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sync Now Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Google Ads credentials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get all clients": {
+      "main": [
+        [
+          {
+            "node": "Get MCC accounts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Client already exists?": {
+      "main": [
+        [
+          {
+            "node": "Prepare for campaign discovery",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create client for discovered account",
+            "type": "main",
             "index": 0
           }
         ]
