@@ -216,7 +216,7 @@
           },
           "conditions": [
             {
-              "leftValue": "={{ $json.actionType }}",
+              "leftValue": "={{ $('Build campaign action body').item.json.actionType }}",
               "rightValue": "update_daily_budget",
               "operator": {
                 "type": "string",
