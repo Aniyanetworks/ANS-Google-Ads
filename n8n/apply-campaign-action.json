@@ -121,7 +121,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const campaign = $('Get campaign').item.json;\nif (!campaign || !campaign.id) {\n  throw new Error('Campaign not found.');\n}\nconst rawCustomerId = campaign.google_ads_customer_id;\nif (!rawCustomerId) {\n  throw new Error('This campaign has no google_ads_customer_id set.');\n}\nconst customerId = String(rawCustomerId).replace(/[^0-9]/g, '');\n\nconst DIRECT_ACCESS_CUSTOMER_IDS = ['3534195221'];\nconst mccCustomerId = $('Get Google Ads credentials').item.json.mcc_customer_id;\nconst loginCustomerId = DIRECT_ACCESS_CUSTOMER_IDS.includes(customerId) ? '' : mccCustomerId;\n\nconst action = $('Validate input').item.json.proposed_action;\n\nlet urlSuffix, body;\n\nif (action.action_type === 'update_daily_budget') {\n  if (!campaign.google_ads_budget_resource) {\n    throw new Error('This campaign has no google_ads_budget_resource on file (it was likely built before that field was added) \\u2014 update it manually in Supabase or rebuild the campaign before this action type can be applied.');\n  }\n  if (typeof action.daily_budget_usd !== 'number') {\n    throw new Error('proposed_action.daily_budget_usd is missing or not a number.');\n  }\n  urlSuffix = 'campaignBudgets:mutate';\n  body = {\n    operations: [{\n      update: {\n        resourceName: campaign.google_ads_budget_resource,\n        amountMicros: String(Math.round(action.daily_budget_usd * 1000000)),\n      },\n      updateMask: 'amountMicros',\n    }],\n  };\n} else if (action.action_type === 'pause_campaign' || action.action_type === 'resume_campaign') {\n  if (!campaign.google_ads_campaign_resource) {\n    throw new Error('This campaign has no google_ads_campaign_resource on file.');\n  }\n  urlSuffix = 'campaigns:mutate';\n  body = {\n    operations: [{\n      update: {\n        resourceName: campaign.google_ads_campaign_resource,\n        status: action.action_type === 'pause_campaign' ? 'PAUSED' : 'ENABLED',\n      },\n      updateMask: 'status',\n    }],\n  };\n} else {\n  throw new Error('Unknown proposed_action.action_type: ' + action.action_type);\n}\n\nreturn [{ json: { customerId, loginCustomerId, urlSuffix, body } }];\n"
+        "jsCode": "const campaign = $('Get campaign').item.json;\nif (!campaign || !campaign.id) {\n  throw new Error('Campaign not found.');\n}\nconst rawCustomerId = campaign.google_ads_customer_id;\nif (!rawCustomerId) {\n  throw new Error('This campaign has no google_ads_customer_id set.');\n}\nconst customerId = String(rawCustomerId).replace(/[^0-9]/g, '');\n\nconst DIRECT_ACCESS_CUSTOMER_IDS = ['3534195221'];\nconst mccCustomerId = $('Get Google Ads credentials').item.json.mcc_customer_id;\nconst loginCustomerId = DIRECT_ACCESS_CUSTOMER_IDS.includes(customerId) ? '' : mccCustomerId;\n\nconst action = $('Validate input').item.json.proposed_action;\n\nlet urlSuffix, body;\n\nif (action.action_type === 'update_daily_budget') {\n  if (!campaign.google_ads_budget_resource) {\n    throw new Error('This campaign has no google_ads_budget_resource on file (it was likely built before that field was added) \\u2014 update it manually in Supabase or rebuild the campaign before this action type can be applied.');\n  }\n  if (typeof action.daily_budget_usd !== 'number') {\n    throw new Error('proposed_action.daily_budget_usd is missing or not a number.');\n  }\n  urlSuffix = 'campaignBudgets:mutate';\n  body = {\n    operations: [{\n      update: {\n        resourceName: campaign.google_ads_budget_resource,\n        amountMicros: String(Math.round(action.daily_budget_usd * 1000000)),\n      },\n      updateMask: 'amountMicros',\n    }],\n  };\n} else if (action.action_type === 'pause_campaign' || action.action_type === 'resume_campaign') {\n  if (!campaign.google_ads_campaign_resource) {\n    throw new Error('This campaign has no google_ads_campaign_resource on file.');\n  }\n  urlSuffix = 'campaigns:mutate';\n  body = {\n    operations: [{\n      update: {\n        resourceName: campaign.google_ads_campaign_resource,\n        status: action.action_type === 'pause_campaign' ? 'PAUSED' : 'ENABLED',\n      },\n      updateMask: 'status',\n    }],\n  };\n} else {\n  throw new Error('Unknown proposed_action.action_type: ' + action.action_type);\n}\n\nreturn [{\n  json: {\n    customerId,\n    loginCustomerId,\n    urlSuffix,\n    body,\n    campaignRowId: $('Validate input').item.json.campaign_id,\n    actionType: action.action_type,\n    dailyBudgetUsd: action.daily_budget_usd,\n    campaignStatusValue: action.action_type === 'pause_campaign' ? 'paused' : 'active',\n  },\n}];\n"
       },
       "id": "build-body-1",
       "name": "Build campaign action body",
@@ -205,6 +205,115 @@
         1560,
         300
       ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.actionType }}",
+              "rightValue": "update_daily_budget",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "aca-is-budget-1",
+      "name": "Is budget update?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "campaigns",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Validate input').item.json.campaign_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "daily_budget_usd",
+              "fieldValue": "={{ $('Build campaign action body').item.json.dailyBudgetUsd }}"
+            }
+          ]
+        }
+      },
+      "id": "aca-update-budget-1",
+      "name": "Update campaign budget",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        400
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Writes the new budget back to campaigns.daily_budget_usd — without this, the Google Ads change succeeds but the dashboard keeps showing the old cached value. Missing until this fix (confirmed live: applied a $2 budget change, Google Ads updated, dashboard still showed $1)."
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "campaigns",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $('Validate input').item.json.campaign_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "={{ $('Build campaign action body').item.json.campaignStatusValue }}"
+            }
+          ]
+        }
+      },
+      "id": "aca-update-status-1",
+      "name": "Update campaign status",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1560,
+        520
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Same missing-writeback bug as 'Update campaign budget', for pause_campaign/resume_campaign."
     }
   ],
   "connections": {
@@ -278,7 +387,7 @@
       "main": [
         [
           {
-            "node": "Mark chat message applied",
+            "node": "Is budget update?",
             "type": "main",
             "index": 0
           }
@@ -290,6 +399,46 @@
         [
           {
             "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is budget update?": {
+      "main": [
+        [
+          {
+            "node": "Update campaign budget",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update campaign status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update campaign budget": {
+      "main": [
+        [
+          {
+            "node": "Mark chat message applied",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update campaign status": {
+      "main": [
+        [
+          {
+            "node": "Mark chat message applied",
             "type": "main",
             "index": 0
           }
