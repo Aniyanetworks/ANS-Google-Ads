@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import IntakeModal from "../components/IntakeModal";
 import EditClientModal from "../components/EditClientModal";
+import ConfirmDialog from "../components/ConfirmDialog";
 
 type Client = {
   id: string;
@@ -21,18 +22,20 @@ type Campaign = {
   daily_budget_usd: number;
 };
 type Metric = { cost: number; conversions_value: number };
+type CampaignWithTotals = Campaign & { totals: Metric };
 
 const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
 export default function ClientDetailPage() {
   const { clientId } = useParams<{ clientId: string }>();
   const [client, setClient] = useState<Client | null>(null);
-  const [campaigns, setCampaigns] = useState<(Campaign & { totals: Metric })[] | null>(null);
+  const [campaigns, setCampaigns] = useState<CampaignWithTotals[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
   const [showIntake, setShowIntake] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [pendingDelete, setPendingDelete] = useState<CampaignWithTotals | null>(null);
 
   useEffect(() => {
     if (!clientId) return;
@@ -87,6 +90,15 @@ export default function ClientDetailPage() {
 
     load();
   }, [clientId, refreshKey]);
+
+  async function handleDeleteCampaign(campaign: CampaignWithTotals) {
+    const { error } = await supabase.from("campaigns").delete().eq("id", campaign.id);
+    if (error) {
+      window.alert(`Delete failed: ${error.message}`);
+      return;
+    }
+    setRefreshKey((k) => k + 1);
+  }
 
   if (error) {
     return (
@@ -164,6 +176,7 @@ export default function ClientDetailPage() {
                     <th className="px-4 py-3">Cost</th>
                     <th className="px-4 py-3">Conv. Value</th>
                     <th className="px-4 py-3">ROAS</th>
+                    <th className="px-4 py-3">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -192,6 +205,14 @@ export default function ClientDetailPage() {
                           ) : (
                             `${roas.toFixed(2)}x`
                           )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <button
+                            onClick={() => setPendingDelete(c)}
+                            className="rounded-lg border border-red-300 px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50"
+                          >
+                            Delete
+                          </button>
                         </td>
                       </tr>
                     );
@@ -224,6 +245,20 @@ export default function ClientDetailPage() {
           onSaved={() => {
             setShowEdit(false);
             setRefreshKey((k) => k + 1);
+          }}
+        />
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`Delete ${pendingDelete.campaign_name}?`}
+          message="This removes the campaign from the dashboard — it does not touch anything already built in Google Ads. The next sync will re-discover it if it's still there."
+          confirmLabel="Delete"
+          danger
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={async () => {
+            await handleDeleteCampaign(pendingDelete);
+            setPendingDelete(null);
           }}
         />
       )}
