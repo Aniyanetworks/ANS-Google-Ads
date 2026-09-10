@@ -63,6 +63,18 @@ create table if not exists campaigns (
 
 create index if not exists campaigns_client_id_idx on campaigns(client_id);
 
+-- Guards against sync-metrics.json's campaign-discovery step inserting the
+-- same real Google Ads campaign twice. The in-memory "already known"
+-- dedup check inside that workflow is only a snapshot at the start of one
+-- execution -- it can't see inserts another concurrent execution is making
+-- at the same time (e.g. the auto-fired sync from creating a client racing
+-- a manual "Sync Now" click), so two runs can both decide a campaign is
+-- new and both insert it. This constraint makes that impossible instead of
+-- just unlikely.
+create unique index if not exists campaigns_google_ads_campaign_resource_uidx
+  on campaigns(google_ads_campaign_resource)
+  where google_ads_campaign_resource is not null;
+
 create table if not exists campaign_metrics (
   id uuid primary key default gen_random_uuid(),
   campaign_id uuid not null references campaigns(id) on delete cascade,

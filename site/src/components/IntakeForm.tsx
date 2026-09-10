@@ -23,6 +23,7 @@ export default function IntakeForm({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [syncTriggered, setSyncTriggered] = useState(false);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -32,6 +33,9 @@ export default function IntakeForm({
     const form = new FormData(e.currentTarget);
 
     if (!existingClient) {
+      const googleAdsCustomerId =
+        (form.get("googleAdsCustomerId") as string)?.replace(/[^0-9]/g, "") || null;
+
       const { error: clientError } = await supabase.from("clients").insert({
         id: crypto.randomUUID(),
         name: form.get("clientName"),
@@ -39,14 +43,28 @@ export default function IntakeForm({
         business_name: form.get("businessName"),
         website_url: form.get("websiteUrl"),
         phone: form.get("phone") || null,
-        google_ads_customer_id:
-          (form.get("googleAdsCustomerId") as string)?.replace(/[^0-9]/g, "") || null,
+        google_ads_customer_id: googleAdsCustomerId,
       });
 
       if (clientError) {
         setError(clientError.message);
         setSubmitting(false);
         return;
+      }
+
+      // A Customer ID means there are real campaigns in Google Ads for this
+      // client to discover — kick off a sync immediately instead of making
+      // the agency wait for the next scheduled run or click "Sync Now"
+      // themselves.
+      const syncWebhookUrl = import.meta.env.VITE_N8N_SYNC_NOW_WEBHOOK_URL;
+      if (googleAdsCustomerId && syncWebhookUrl) {
+        try {
+          await fetch(syncWebhookUrl, { method: "POST" });
+          setSyncTriggered(true);
+        } catch {
+          // Non-fatal: the client row exists either way and will still be
+          // picked up by the next scheduled sync or a manual "Sync Now".
+        }
       }
 
       setSubmitting(false);
@@ -115,7 +133,9 @@ export default function IntakeForm({
         <p className="mt-2 text-slate-600">
           {existingClient
             ? "We'll be building this campaign shortly."
-            : "Add a campaign for this client whenever you're ready."}
+            : syncTriggered
+              ? "Syncing their Google Ads account now — campaigns will appear shortly."
+              : "Add a campaign for this client whenever you're ready."}
         </p>
         {onSuccess && (
           <button

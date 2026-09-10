@@ -126,7 +126,7 @@
         "url": "=https://googleads.googleapis.com/v25/customers/{{ $json.customerId }}/googleAds:search",
         "sendHeaders": true,
         "specifyHeaders": "json",
-        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Filter buildable campaigns').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Filter buildable campaigns').item.json.loginCustomerId }\n    : {}\n)) }}",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').first().json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').first().json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Filter buildable campaigns').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Filter buildable campaigns').item.json.loginCustomerId }\n    : {}\n)) }}",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ query: `SELECT segments.date, metrics.cost_micros, metrics.conversions, metrics.conversions_value, metrics.impressions, metrics.clicks FROM campaign WHERE campaign.id = ${$json.googleCampaignId} AND segments.date DURING YESTERDAY` }) }}",
@@ -139,7 +139,8 @@
       "position": [
         208,
         1312
-      ]
+      ],
+      "notes": " Also switched to .first() (not .item) for 'Refresh Google Ads token' and 'Get Google Ads credentials' -- both are singleton nodes from well before any branching, but their .item reference can go ambiguous once an upstream node that manufactures new items (e.g. 'Filter buildable campaigns', or a multi-client 'Get all clients' feeding this node) produces 2+ items and breaks the automatic paired-item chain -- same root cause just fixed on 'Discover campaigns', proactively applied here before it causes the identical error live."
     },
     {
       "parameters": {
@@ -423,7 +424,7 @@
         "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Filter buildable campaigns').item.json.customerId }}/googleAds:search",
         "sendHeaders": true,
         "specifyHeaders": "json",
-        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Filter buildable campaigns').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Filter buildable campaigns').item.json.loginCustomerId }\n    : {}\n)) }}",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').first().json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').first().json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Filter buildable campaigns').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Filter buildable campaigns').item.json.loginCustomerId }\n    : {}\n)) }}",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ query: `SELECT recommendation.resource_name, recommendation.type, recommendation.campaign, recommendation.impact FROM recommendation WHERE recommendation.campaign = 'customers/${$('Filter buildable campaigns').item.json.customerId}/campaigns/${$('Filter buildable campaigns').item.json.googleCampaignId}'` }) }}",
@@ -436,7 +437,8 @@
       "position": [
         208,
         1600
-      ]
+      ],
+      "notes": " Also switched to .first() (not .item) for 'Refresh Google Ads token' and 'Get Google Ads credentials' -- both are singleton nodes from well before any branching, but their .item reference can go ambiguous once an upstream node that manufactures new items (e.g. 'Filter buildable campaigns', or a multi-client 'Get all clients' feeding this node) produces 2+ items and breaks the automatic paired-item chain -- same root cause just fixed on 'Discover campaigns', proactively applied here before it causes the identical error live."
     },
     {
       "parameters": {
@@ -477,7 +479,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const campaigns = $('Filter buildable campaigns').all();\nconst searches = $('Search recommendations').all();\nconst output = [];\n\ncampaigns.forEach((c, i) => {\n  const campaignRowId = c.json.campaignRowId;\n  const results = (searches[i] && searches[i].json.results) || [];\n  for (const r of results) {\n    const rec = r.recommendation;\n    const base = rec.impact.baseMetrics;\n    const potential = rec.impact.potentialMetrics;\n    const baseCost = Number(base.costMicros || 0) / 1000000;\n    const potentialCost = Number(potential.costMicros || 0) / 1000000;\n    const valueGain = Number(potential.conversionsValue || 0) - Number(base.conversionsValue || 0);\n    const costSavings = baseCost - potentialCost;\n    const dollarsRecoverable = valueGain > 0 ? valueGain : Math.max(costSavings, 0);\n    output.push({\n      json: {\n        campaign_id: campaignRowId,\n        type: rec.type,\n        dollars_recoverable: dollarsRecoverable,\n        resource_name: rec.resourceName,\n        status: 'open',\n      },\n    });\n  }\n});\n\nreturn output;\n"
+        "jsCode": "const campaigns = $('Filter buildable campaigns').all();\nconst searches = $('Search recommendations').all();\nconst output = [];\n\ncampaigns.forEach((c, i) => {\n  const campaignRowId = c.json.campaignRowId;\n  const results = (searches[i] && searches[i].json.results) || [];\n  for (const r of results) {\n    const rec = r.recommendation;\n    // Not every recommendation.type carries impact.baseMetrics/potentialMetrics\n    // (Google Ads omits them entirely for several types) -- fall back to zeros\n    // instead of crashing when they're absent.\n    const base = (rec.impact && rec.impact.baseMetrics) || {};\n    const potential = (rec.impact && rec.impact.potentialMetrics) || {};\n    const baseCost = Number(base.costMicros || 0) / 1000000;\n    const potentialCost = Number(potential.costMicros || 0) / 1000000;\n    const valueGain = Number(potential.conversionsValue || 0) - Number(base.conversionsValue || 0);\n    const costSavings = baseCost - potentialCost;\n    const dollarsRecoverable = valueGain > 0 ? valueGain : Math.max(costSavings, 0);\n    output.push({\n      json: {\n        campaign_id: campaignRowId,\n        type: rec.type,\n        dollars_recoverable: dollarsRecoverable,\n        resource_name: rec.resourceName,\n        status: 'open',\n      },\n    });\n  }\n});\n\nreturn output;\n"
       },
       "id": "4097fc92-8555-4900-bf35-776170df2419",
       "name": "Build recommendation items",
@@ -487,7 +489,7 @@
         656,
         1600
       ],
-      "notes": "Iterates all campaigns by index, flattening each campaign's recommendations into the output list. Can't use n8n's 'Run Once for Each Item' Code mode here since one campaign can produce 0-N recommendation items (that mode requires exactly 1 output per input) — explicit .all()-based iteration handles that correctly."
+      "notes": "Iterates all campaigns by index, flattening each campaign's recommendations into the output list. Can't use n8n's 'Run Once for Each Item' Code mode here since one campaign can produce 0-N recommendation items (that mode requires exactly 1 output per input) — explicit .all()-based iteration handles that correctly. Confirmed live: recommendation.impact (or its baseMetrics/potentialMetrics children) is missing entirely for some recommendation types -- crashed with \"Cannot read properties of undefined (reading baseMetrics)\" as soon as a campaign had one of those. Both now default to an empty object so dollars_recoverable falls back to 0 instead of throwing. Confirmed live: recommendation.impact (or its baseMetrics/potentialMetrics children) is missing entirely for some recommendation types -- crashed with \"Cannot read properties of undefined (reading baseMetrics)\" as soon as a campaign had one of those. Both now default to an empty object so dollars_recoverable falls back to 0 instead of throwing."
     },
     {
       "parameters": {
@@ -539,7 +541,7 @@
         "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Filter buildable campaigns').item.json.customerId }}/googleAds:search",
         "sendHeaders": true,
         "specifyHeaders": "json",
-        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Filter buildable campaigns').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Filter buildable campaigns').item.json.loginCustomerId }\n    : {}\n)) }}",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').first().json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').first().json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Filter buildable campaigns').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Filter buildable campaigns').item.json.loginCustomerId }\n    : {}\n)) }}",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ query: `SELECT campaign.status, campaign_budget.amount_micros FROM campaign WHERE campaign.id = ${$('Filter buildable campaigns').item.json.googleCampaignId}` }) }}",
@@ -553,7 +555,7 @@
         208,
         1856
       ],
-      "notes": "Pulls the campaign's ACTUAL current status + budget from Google Ads, independent of how it got that way — catches changes made directly in the Google Ads UI, not just ones applied through apply-campaign-action.json/send-reply.json. Runs every sync, reconciling Supabase to reality rather than relying on every write path to remember to keep it in sync."
+      "notes": "Pulls the campaign's ACTUAL current status + budget from Google Ads, independent of how it got that way — catches changes made directly in the Google Ads UI, not just ones applied through apply-campaign-action.json/send-reply.json. Runs every sync, reconciling Supabase to reality rather than relying on every write path to remember to keep it in sync. Also switched to .first() (not .item) for 'Refresh Google Ads token' and 'Get Google Ads credentials' -- both are singleton nodes from well before any branching, but their .item reference can go ambiguous once an upstream node that manufactures new items (e.g. 'Filter buildable campaigns', or a multi-client 'Get all clients' feeding this node) produces 2+ items and breaks the automatic paired-item chain -- same root cause just fixed on 'Discover campaigns', proactively applied here before it causes the identical error live."
     },
     {
       "parameters": {
@@ -657,7 +659,7 @@
         "url": "=https://googleads.googleapis.com/v25/customers/{{ $json.customerId }}/googleAds:search",
         "sendHeaders": true,
         "specifyHeaders": "json",
-        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $json.loginCustomerId\n    ? { \"login-customer-id\": $json.loginCustomerId }\n    : {}\n)) }}",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').first().json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').first().json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $json.loginCustomerId\n    ? { \"login-customer-id\": $json.loginCustomerId }\n    : {}\n)) }}",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ query: `SELECT campaign.id, campaign.name, campaign.status, campaign.resource_name, campaign_budget.amount_micros, campaign_budget.resource_name FROM campaign WHERE campaign.status != 'REMOVED'` }) }}",
@@ -671,11 +673,11 @@
         480,
         1000
       ],
-      "notes": "Pulls EVERY campaign Google Ads has for this customer, not just ones built through this app — this is what lets the dashboard show campaigns created directly in the Google Ads UI too."
+      "notes": "Uses .first() (not .item) for 'Refresh Google Ads token' and 'Get Google Ads credentials' -- both always produce exactly one item, from well before any of the three discovery sources branch off, but n8n's pairedItem tracking can't resolve .item once one of those sources (e.g. 'Get clients pending discovery', which builds brand-new JSON objects via .map()) loses the automatic paired-item link back to them. Confirmed live: '.item' errored with \"Paired item data ... is unavailable\" as soon as 'Get clients pending discovery' produced more than one item."
     },
     {
       "parameters": {
-        "jsCode": "function safeAll(nodeName) {\n  try {\n    return $(nodeName).all();\n  } catch (e) {\n    return [];\n  }\n}\n\nconst customers = [...safeAll('Get distinct customers'), ...safeAll('Prepare for campaign discovery')];\nconst searches = $input.all();\nconst statusMap = { ENABLED: 'active', PAUSED: 'paused' };\nconst output = [];\n\ncustomers.forEach((c, i) => {\n  const { customerId, clientId, knownResources } = c.json;\n  const results = (searches[i] && searches[i].json.results) || [];\n  for (const r of results) {\n    const resourceName = r.campaign.resourceName;\n    if (!resourceName || knownResources.includes(resourceName)) continue;\n    output.push({\n      json: {\n        clientId,\n        customerId,\n        campaignName: r.campaign.name,\n        status: statusMap[r.campaign.status] || 'paused',\n        dailyBudgetUsd: Number((r.campaignBudget && r.campaignBudget.amountMicros) || 0) / 1000000,\n        campaignResource: resourceName,\n        budgetResource: (r.campaignBudget && r.campaignBudget.resourceName) || null,\n      },\n    });\n  }\n});\n\nreturn output;\n"
+        "jsCode": "function safeAll(nodeName) {\n  try {\n    return $(nodeName).all();\n  } catch (e) {\n    return [];\n  }\n}\n\nconst customers = [...safeAll('Get distinct customers'), ...safeAll('Prepare for campaign discovery'), ...safeAll('Get clients pending discovery')];\n// Matches each 'Discover campaigns' response back to the customer context\n// that produced it by customerId (extracted from the response's own\n// campaign.resourceName, e.g. customers/123/campaigns/456) instead of by\n// array index -- index-based pairing would silently break whenever more\n// than one of the three sources above produces items in the same run,\n// since it depends on n8n's merge order for three separate upstream\n// connections matching the concatenation order here, which isn't\n// guaranteed.\nconst byCustomerId = new Map();\nfor (const c of customers) {\n  byCustomerId.set(String(c.json.customerId), c.json);\n}\n\nconst searches = $input.all();\nconst statusMap = { ENABLED: 'active', PAUSED: 'paused' };\nconst output = [];\n\nsearches.forEach((s) => {\n  const results = (s.json && s.json.results) || [];\n  for (const r of results) {\n    const resourceName = r.campaign.resourceName;\n    if (!resourceName) continue;\n    const match = /^customers\\/(\\d+)\\//.exec(resourceName);\n    const ctx = match ? byCustomerId.get(match[1]) : null;\n    if (!ctx || ctx.knownResources.includes(resourceName)) continue;\n    output.push({\n      json: {\n        clientId: ctx.clientId,\n        customerId: ctx.customerId,\n        campaignName: r.campaign.name,\n        status: statusMap[r.campaign.status] || 'paused',\n        dailyBudgetUsd: Number((r.campaignBudget && r.campaignBudget.amountMicros) || 0) / 1000000,\n        campaignResource: resourceName,\n        budgetResource: (r.campaignBudget && r.campaignBudget.resourceName) || null,\n      },\n    });\n  }\n});\n\nreturn output;\n"
       },
       "id": "filter-new-campaigns-1",
       "name": "Filter new campaigns",
@@ -685,7 +687,7 @@
         700,
         1000
       ],
-      "notes": "'Discover campaigns' has two upstream sources (existing-customer discovery via 'Get distinct customers', and whole-account discovery via 'Prepare for campaign discovery') but only ONE of them actually executes on any given run — whichever branch produced items. Referencing the node that did NOT run via $('NodeName').all() throws 'Node X hasn't been executed', not an empty array, so both lookups go through safeAll() to tolerate either branch being idle."
+      "notes": "'Discover campaigns' has THREE upstream sources ('Get distinct customers', 'Prepare for campaign discovery', 'Get clients pending discovery') and any subset of them can produce items in the same run. Matches each HTTP response back to its customer context by customerId parsed out of the response's own campaign.resourceName, NOT by array index -- confirmed live that index-based pairing broke as soon as two sources produced items in the same run simultaneously (a client with existing tracked campaigns via 'Get distinct customers' running alongside a brand-new client-level-customer-id client via 'Get clients pending discovery'), since it depends on n8n's actual multi-source merge order matching the concatenation order here, which isn't guaranteed and evidently didn't hold."
     },
     {
       "parameters": {
@@ -738,7 +740,8 @@
           "name": "Supabase Google Ads"
         }
       },
-      "notes": "primary_keyword/goal are intentionally left unset (now nullable) — those are intake-form concepts that don't apply to a campaign nobody built through this app. Shows up on the dashboard exactly like any other campaign once inserted; the next sync run's metrics/recommendations/config branches will pick it up too since they iterate every campaign with a google_ads_campaign_resource, not just ones from the intake flow."
+      "notes": "primary_keyword/goal are intentionally left unset (now nullable) — those are intake-form concepts that don't apply to a campaign nobody built through this app. Shows up on the dashboard exactly like any other campaign once inserted; the next sync run's metrics/recommendations/config branches will pick it up too since they iterate every campaign with a google_ads_campaign_resource, not just ones from the intake flow. continueOnFail is on so a unique-constraint conflict (campaigns_google_ads_campaign_resource_uidx, added after a live duplicate-insert race condition was found) skips just that one duplicate item instead of halting the whole sync run.",
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -746,7 +749,7 @@
         "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Get Google Ads credentials').item.json.mcc_customer_id }}/googleAds:search",
         "sendHeaders": true,
         "specifyHeaders": "json",
-        "jsonHeaders": "={{ JSON.stringify({\n  \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n  \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n  \"login-customer-id\": $('Get Google Ads credentials').item.json.mcc_customer_id,\n  \"Content-Type\": \"application/json\"\n}) }}",
+        "jsonHeaders": "={{ JSON.stringify({\n  \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').first().json.access_token,\n  \"developer-token\": $('Get Google Ads credentials').first().json.developer_token,\n  \"login-customer-id\": $('Get Google Ads credentials').first().json.mcc_customer_id,\n  \"Content-Type\": \"application/json\"\n}) }}",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ query: `SELECT customer_client.id, customer_client.descriptive_name FROM customer_client WHERE customer_client.manager = false AND customer_client.status = 'ENABLED'` }) }}",
@@ -760,7 +763,7 @@
         260,
         700
       ],
-      "notes": "Asks the MCC directly what real, enabled client accounts it manages — not derived from anything already in Supabase. This is what catches an account like a newly-linked client that has no clients/campaigns row yet at all."
+      "notes": "Asks the MCC directly what real, enabled client accounts it manages — not derived from anything already in Supabase. This is what catches an account like a newly-linked client that has no clients/campaigns row yet at all. Also switched to .first() (not .item) for 'Refresh Google Ads token' and 'Get Google Ads credentials' -- both are singleton nodes from well before any branching, but their .item reference can go ambiguous once an upstream node that manufactures new items (e.g. 'Filter buildable campaigns', or a multi-client 'Get all clients' feeding this node) produces 2+ items and breaks the automatic paired-item chain -- same root cause just fixed on 'Discover campaigns', proactively applied here before it causes the identical error live."
     },
     {
       "parameters": {
@@ -866,8 +869,9 @@
           "name": "Supabase Google Ads"
         }
       },
-      "notes": "Needed so 'Filter unknown accounts' can recognize an account that already has a client row but zero campaigns yet (e.g. a previous sync created the client but discovery failed before finding its campaigns) — without this, every such account would get a DUPLICATE client row created on every subsequent sync, since the old check only looked at campaigns.google_ads_customer_id. Also needs alwaysOutputData: true for the same reason as 'Get all campaigns' above — zero clients (a fresh/empty clients table) would otherwise halt the workflow here too, before 'Get MCC accounts' ever runs. The placeholder item this produces on an empty table is already handled safely (Filter unknown accounts only matches clients whose email fits the googleads-<id>@discovered.local pattern).",
-      "alwaysOutputData": true
+      "notes": "Needed so 'Filter unknown accounts' can recognize an account that already has a client row but zero campaigns yet (e.g. a previous sync created the client but discovery failed before finding its campaigns) — without this, every such account would get a DUPLICATE client row created on every subsequent sync, since the old check only looked at campaigns.google_ads_customer_id. Also needs alwaysOutputData: true for the same reason as 'Get all campaigns' above — zero clients (a fresh/empty clients table) would otherwise halt the workflow here too, before 'Get MCC accounts' ever runs. The placeholder item this produces on an empty table is already handled safely (Filter unknown accounts only matches clients whose email fits the googleads-<id>@discovered.local pattern). executeOnce is on: this node was running once PER INPUT ITEM (n8n's default for any node), and it's fed by Get all campaigns which now has multiple items (one per real campaign) -- confirmed live it ran 3 times and produced 6 duplicated client rows (2 real clients x 3), which cascaded into Get clients pending discovery incorrectly treating one real client as multiple ambiguous ones sharing a customer_id and skipping it. This node never needed per-item context (it just fetches the whole clients table), so it should only ever run once per sync.",
+      "alwaysOutputData": true,
+      "executeOnce": true
     },
     {
       "parameters": {
@@ -899,6 +903,20 @@
         700,
         700
       ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const clients = $input.all().map(i => i.json);\nconst campaignRows = $('Get all campaigns').all().map(i => i.json).filter(r => r && r.client_id);\nconst clientIdsWithCampaigns = new Set(campaignRows.map(r => r.client_id));\n\nconst DIRECT_ACCESS_CUSTOMER_IDS = ['3534195221'];\nconst mccCustomerId = $('Get Google Ads credentials').first().json.mcc_customer_id;\n\nconst pending = clients.filter(c => c.google_ads_customer_id && !clientIdsWithCampaigns.has(c.id));\n\n// Same ambiguity guard as 'Get distinct customers': if more than one client\n// (with no campaigns yet) claims the same google_ads_customer_id, there's no\n// safe way to know which one newly-discovered campaigns belong to -- skip\n// that customer_id entirely rather than picking one arbitrarily. Without\n// this, 'Filter new campaigns' would collapse both into a single Map entry\n// keyed by customerId and attribute every discovered campaign to whichever\n// client happened to be last, silently starving the other.\nconst clientIdsByCustomerId = new Map();\nfor (const c of pending) {\n  const customerId = String(c.google_ads_customer_id).replace(/[^0-9]/g, '');\n  if (!clientIdsByCustomerId.has(customerId)) clientIdsByCustomerId.set(customerId, []);\n  clientIdsByCustomerId.get(customerId).push(c.id);\n}\n\nconst out = [];\nfor (const c of pending) {\n  const customerId = String(c.google_ads_customer_id).replace(/[^0-9]/g, '');\n  if (clientIdsByCustomerId.get(customerId).length > 1) continue;\n  out.push({\n    json: {\n      customerId,\n      clientId: c.id,\n      loginCustomerId: DIRECT_ACCESS_CUSTOMER_IDS.includes(customerId) ? '' : mccCustomerId,\n      knownResources: [],\n    },\n  });\n}\nreturn out;\n"
+      },
+      "id": "clients-pending-discovery-1",
+      "name": "Get clients pending discovery",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        480
+      ],
+      "notes": "Catches a client whose google_ads_customer_id was set directly on the CLIENT row (via the New Client / Edit Client forms) but who has zero campaigns yet — 'Get distinct customers' can't find these (it only derives customer IDs from existing campaign rows, so a client with no campaigns has nothing for it to read), and 'Get MCC accounts' only finds accounts that are real linked children of the MCC, which excludes direct-access accounts like 3534195221 entirely. Without this branch, such a client's campaigns would never be auto-discovered at all — confirmed live: a client created with a manually-entered Customer ID stayed at 0 campaigns through every sync. Confirmed live: two clients ended up with the same google_ads_customer_id set (both with zero campaigns) -- without this guard, both got emitted as separate items with the same customerId, and 'Filter new campaigns' (which maps by customerId) silently collapsed them into one entry, attributing every discovered campaign to whichever client happened to be last rather than the one the agency actually meant. Now matches 'Get distinct customers'' existing skip-on-ambiguity behavior instead of guessing."
     }
   ],
   "connections": {
@@ -1248,6 +1266,11 @@
             "node": "Get MCC accounts",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Get clients pending discovery",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -1264,6 +1287,17 @@
         [
           {
             "node": "Create client for discovered account",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get clients pending discovery": {
+      "main": [
+        [
+          {
+            "node": "Discover campaigns",
             "type": "main",
             "index": 0
           }
