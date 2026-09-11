@@ -559,7 +559,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const campaigns = $('Filter buildable campaigns').all();\nconst configs = $('Get campaign config').all();\nconst statusMap = { ENABLED: 'active', PAUSED: 'paused' };\nconst output = [];\n\ncampaigns.forEach((c, i) => {\n  const results = (configs[i] && configs[i].json.results) || [];\n  const row = results[0];\n  if (!row) return;\n  output.push({\n    json: {\n      campaignRowId: c.json.campaignRowId,\n      status: statusMap[row.campaign.status] || 'paused',\n      dailyBudgetUsd: Number(row.campaignBudget.amountMicros || 0) / 1000000,\n    },\n  });\n});\n\nreturn output;\n"
+        "jsCode": "const campaigns = $('Filter buildable campaigns').all();\nconst configs = $('Get campaign config').all();\nconst statusMap = { ENABLED: 'active', PAUSED: 'paused' };\nconst output = [];\n\ncampaigns.forEach((c, i) => {\n  const results = (configs[i] && configs[i].json.results) || [];\n  const row = results[0];\n  // No row back (campaign not found) or an explicit REMOVED status both\n  // mean this campaign no longer exists in Google Ads -- Google Ads never\n  // hard-deletes a campaign, 'removed' is the terminal state, same\n  // convention delete-campaign.json uses when the agency deletes from the\n  // dashboard. Route these to get deleted from Supabase too instead of\n  // silently going stale, so a delete on either side reflects on the other.\n  const removed = !row || row.campaign.status === 'REMOVED';\n  if (removed) {\n    output.push({ json: { campaignRowId: c.json.campaignRowId, removed: true } });\n    return;\n  }\n  output.push({\n    json: {\n      campaignRowId: c.json.campaignRowId,\n      removed: false,\n      status: statusMap[row.campaign.status] || 'paused',\n      dailyBudgetUsd: Number(row.campaignBudget.amountMicros || 0) / 1000000,\n    },\n  });\n});\n\nreturn output;\n"
       },
       "id": "7dd05fbb-dc5a-4337-aa84-03b2aa7e48b6",
       "name": "Build campaign config update",
@@ -569,7 +569,7 @@
         432,
         1856
       ],
-      "notes": "Maps Google's campaign.status enum (ENABLED/PAUSED/REMOVED/...) to this schema's values. Anything other than ENABLED falls back to 'paused' — a removed/unknown state should not read as 'active'. Skips a campaign entirely if Google returned no row for it (e.g. deleted), rather than writing garbage.\n\nIterates all campaigns by index, same reason as 'Build metrics row' above."
+      "notes": "Maps Google's campaign.status enum (ENABLED/PAUSED/REMOVED/...) to this schema's values. Anything other than ENABLED/REMOVED falls back to 'paused' -- an unknown state should not read as 'active'. A campaign Google Ads no longer returns a row for, or explicitly reports as REMOVED, is routed to 'Removed in Google Ads?' for deletion from Supabase instead of a config update, so a campaign deleted directly in the Google Ads UI disappears from the dashboard on the next sync rather than sitting there stale forever.\n\nIterates all campaigns by index, same reason as 'Build metrics row' above."
     },
     {
       "parameters": {
@@ -917,6 +917,116 @@
         480
       ],
       "notes": "Catches a client whose google_ads_customer_id was set directly on the CLIENT row (via the New Client / Edit Client forms) but who has zero campaigns yet — 'Get distinct customers' can't find these (it only derives customer IDs from existing campaign rows, so a client with no campaigns has nothing for it to read), and 'Get MCC accounts' only finds accounts that are real linked children of the MCC, which excludes direct-access accounts like 3534195221 entirely. Without this branch, such a client's campaigns would never be auto-discovered at all — confirmed live: a client created with a manually-entered Customer ID stayed at 0 campaigns through every sync. Confirmed live: two clients ended up with the same google_ads_customer_id set (both with zero campaigns) -- without this guard, both got emitted as separate items with the same customerId, and 'Filter new campaigns' (which maps by customerId) silently collapsed them into one entry, attributing every discovered campaign to whichever client happened to be last rather than the one the agency actually meant. Now matches 'Get distinct customers'' existing skip-on-ambiguity behavior instead of guessing."
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "campaign_chat_messages",
+        "returnAll": true,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "campaign_id",
+              "keyValue": "={{ $json.campaignRowId }}"
+            },
+            {
+              "keyName": "role",
+              "keyValue": "assistant"
+            }
+          ]
+        }
+      },
+      "id": "get-recent-suggestions-1",
+      "name": "Get recent suggestions",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1944,
+        1432
+      ],
+      "alwaysOutputData": true,
+      "notes": "Fetches this campaign's past proactive-suggestion messages so 'Filter should post (dedupe)' can tell whether posting a new one would just be a repeat. alwaysOutputData is on since a campaign with no prior suggestions (the normal case) returns zero rows, which would otherwise halt the workflow here.",
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prepared = $('Prepare suggestion').all().map(i => i.json);\nconst allRecent = $input.all().map(i => i.json).filter(r => r && r.id);\n\nconst ONE_DAY_MS = 24 * 60 * 60 * 1000;\nconst now = Date.now();\n\nreturn prepared.map((p) => {\n  if (!p.shouldPost) return { json: p };\n\n  const recentForCampaign = allRecent.filter(r => r.campaign_id === p.campaignRowId);\n  // Don't repeat an actionable suggestion the agency hasn't confirmed or\n  // dismissed yet -- it's still sitting there, re-posting it is just noise.\n  const hasUnresolvedActionable = recentForCampaign.some(r => r.action_status === 'proposed');\n  // Also throttle non-actionable/informational nudges (no confirm/dismiss\n  // buttons, so they'd otherwise repeat every sync forever) to once a day.\n  const hasRecentAny = recentForCampaign.some((r) => {\n    const age = now - new Date(r.created_at).getTime();\n    return age < ONE_DAY_MS;\n  });\n\n  if (hasUnresolvedActionable || hasRecentAny) {\n    return { json: { ...p, shouldPost: false } };\n  }\n  return { json: p };\n});\n"
+      },
+      "id": "filter-should-post-dedupe-1",
+      "name": "Filter should post (dedupe)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2064,
+        1312
+      ],
+      "notes": "Confirmed live: without this, the same $0-budget/$0-spend campaign got a fresh near-duplicate budget-change suggestion posted on every single sync run (auto-sync-on-load + schedule + manual Sync Now all compound this), since the AI Agent has no memory of what it already suggested. Suppresses should_post when an unresolved actionable suggestion is already sitting in the thread, or any suggestion for this campaign was posted within the last 24 hours."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.removed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "removed-in-google-ads-if-1",
+      "name": "Removed in Google Ads?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        652,
+        1856
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "tableId": "campaigns",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $json.campaignRowId }}"
+            }
+          ]
+        }
+      },
+      "id": "delete-removed-campaign-1",
+      "name": "Delete removed campaign",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        872,
+        1956
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Cascades to campaign_metrics/recommendations/campaign_chat_messages via their FK on_delete cascade -- matches the same cleanup delete-campaign.json does for an agency-initiated delete."
     }
   ],
   "connections": {
@@ -1087,7 +1197,7 @@
       "main": [
         [
           {
-            "node": "Should post?",
+            "node": "Get recent suggestions",
             "type": "main",
             "index": 0
           }
@@ -1153,7 +1263,7 @@
       "main": [
         [
           {
-            "node": "Update campaign config",
+            "node": "Removed in Google Ads?",
             "type": "main",
             "index": 0
           }
@@ -1298,6 +1408,46 @@
         [
           {
             "node": "Discover campaigns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get recent suggestions": {
+      "main": [
+        [
+          {
+            "node": "Filter should post (dedupe)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter should post (dedupe)": {
+      "main": [
+        [
+          {
+            "node": "Should post?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Removed in Google Ads?": {
+      "main": [
+        [
+          {
+            "node": "Delete removed campaign",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update campaign config",
             "type": "main",
             "index": 0
           }

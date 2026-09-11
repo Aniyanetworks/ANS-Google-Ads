@@ -1,0 +1,319 @@
+{
+  "name": "delete-campaign",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "delete-campaign",
+        "options": {}
+      },
+      "id": "webhook-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        300
+      ],
+      "webhookId": "delete-campaign",
+      "notes": "Called by ClientDetailPage.tsx's per-campaign Delete button. Payload: { campaign_id }. Waits for the workflow to finish (default response mode) before responding, so the frontend can safely remove the row from its view only after this confirms the delete actually happened."
+    },
+    {
+      "parameters": {
+        "jsCode": "const id = $json.body.campaign_id;\nconst uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nif (typeof id !== 'string' || !uuidRe.test(id)) {\n  throw new Error('campaign_id missing or not a valid UUID: ' + JSON.stringify(id));\n}\nreturn [{ json: { campaign_id: id } }];\n"
+      },
+      "id": "validate-1",
+      "name": "Validate campaign_id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "google_ads_settings",
+        "limit": 1,
+        "filterType": "none"
+      },
+      "id": "get-creds-1",
+      "name": "Get Google Ads credentials",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "campaigns",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $('Validate campaign_id').item.json.campaign_id }}"
+            }
+          ]
+        }
+      },
+      "id": "get-campaign-1",
+      "name": "Get campaign",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        460,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ !!$json.google_ads_campaign_resource }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "built-if-1",
+      "name": "Built in Google Ads?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ],
+      "notes": "A campaign that never made it past 'pending'/'error' (no google_ads_campaign_resource yet) has nothing to remove on the Google Ads side -- just delete the Supabase row directly."
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $('Get campaign').item.json;\nconst DIRECT_ACCESS_CUSTOMER_IDS = ['3534195221'];\nconst customerId = String(row.google_ads_customer_id).replace(/[^0-9]/g, '');\nconst mccCustomerId = $('Get Google Ads credentials').item.json.mcc_customer_id;\nconst loginCustomerId = DIRECT_ACCESS_CUSTOMER_IDS.includes(customerId) ? '' : mccCustomerId;\nreturn [{\n  json: {\n    customerId,\n    loginCustomerId,\n    campaignResource: row.google_ads_campaign_resource,\n  },\n}];\n"
+      },
+      "id": "prepare-removal-1",
+      "name": "Prepare removal context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://oauth2.googleapis.com/token",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "client_id",
+              "value": "={{ $('Get Google Ads credentials').item.json.client_id }}"
+            },
+            {
+              "name": "client_secret",
+              "value": "={{ $('Get Google Ads credentials').item.json.client_secret }}"
+            },
+            {
+              "name": "refresh_token",
+              "value": "={{ $('Get Google Ads credentials').item.json.refresh_token }}"
+            },
+            {
+              "name": "grant_type",
+              "value": "refresh_token"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "refresh-token-1",
+      "name": "Refresh Google Ads token",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $('Prepare removal context').item.json.customerId }}/campaigns:mutate",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Prepare removal context').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Prepare removal context').item.json.loginCustomerId }\n    : {}\n)) }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ operations: [{ remove: $('Prepare removal context').item.json.campaignResource }] }) }}",
+        "options": {}
+      },
+      "id": "remove-campaign-1",
+      "name": "Remove campaign in Google Ads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1340,
+        200
+      ],
+      "notes": "Google Ads never hard-deletes a campaign -- 'remove' sets campaign.status to REMOVED. That's exactly what sync-metrics.json's discovery query already filters on (WHERE campaign.status != 'REMOVED') and what the sync's campaign-config branch now checks per-campaign to delete the Supabase row when Google Ads reports it removed -- this workflow and that check agree on the same convention."
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "tableId": "campaigns",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $('Validate campaign_id').item.json.campaign_id }}"
+            }
+          ]
+        }
+      },
+      "id": "delete-row-1",
+      "name": "Delete campaign row",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        400
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Fed by both IF branches -- reached either after Google Ads confirms the remove, or directly when the campaign was never built there."
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate campaign_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate campaign_id": {
+      "main": [
+        [
+          {
+            "node": "Get Google Ads credentials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Google Ads credentials": {
+      "main": [
+        [
+          {
+            "node": "Get campaign",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get campaign": {
+      "main": [
+        [
+          {
+            "node": "Built in Google Ads?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Built in Google Ads?": {
+      "main": [
+        [
+          {
+            "node": "Prepare removal context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Delete campaign row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare removal context": {
+      "main": [
+        [
+          {
+            "node": "Refresh Google Ads token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refresh Google Ads token": {
+      "main": [
+        [
+          {
+            "node": "Remove campaign in Google Ads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove campaign in Google Ads": {
+      "main": [
+        [
+          {
+            "node": "Delete campaign row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

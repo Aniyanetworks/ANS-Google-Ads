@@ -36,6 +36,7 @@ export default function ClientDetailPage() {
   const [showEdit, setShowEdit] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [pendingDelete, setPendingDelete] = useState<CampaignWithTotals | null>(null);
+  const [deletingCampaign, setDeletingCampaign] = useState(false);
 
   useEffect(() => {
     if (!clientId) return;
@@ -92,11 +93,35 @@ export default function ClientDetailPage() {
   }, [clientId, refreshKey]);
 
   async function handleDeleteCampaign(campaign: CampaignWithTotals) {
-    const { error } = await supabase.from("campaigns").delete().eq("id", campaign.id);
-    if (error) {
-      window.alert(`Delete failed: ${error.message}`);
+    const webhookUrl = import.meta.env.VITE_N8N_DELETE_CAMPAIGN_WEBHOOK_URL;
+    if (!webhookUrl) {
+      window.alert(
+        "VITE_N8N_DELETE_CAMPAIGN_WEBHOOK_URL isn't configured — can't delete this campaign yet."
+      );
       return;
     }
+
+    setDeletingCampaign(true);
+    try {
+      const res = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ campaign_id: campaign.id }),
+      });
+      if (!res.ok) {
+        window.alert(`Delete failed (${res.status}). The campaign may still exist in Google Ads.`);
+        setDeletingCampaign(false);
+        return;
+      }
+    } catch (err) {
+      window.alert(
+        `Delete failed: ${err instanceof Error ? err.message : "network error"}. The campaign may still exist in Google Ads.`
+      );
+      setDeletingCampaign(false);
+      return;
+    }
+
+    setDeletingCampaign(false);
     setRefreshKey((k) => k + 1);
   }
 
@@ -252,8 +277,8 @@ export default function ClientDetailPage() {
       {pendingDelete && (
         <ConfirmDialog
           title={`Delete ${pendingDelete.campaign_name}?`}
-          message="This removes the campaign from the dashboard — it does not touch anything already built in Google Ads. The next sync will re-discover it if it's still there."
-          confirmLabel="Delete"
+          message="This also removes the campaign in Google Ads (if it was ever built there) — Google Ads doesn't permanently delete campaigns, it marks them removed, which is not reversible from here."
+          confirmLabel={deletingCampaign ? "Deleting..." : "Delete"}
           danger
           onCancel={() => setPendingDelete(null)}
           onConfirm={async () => {
