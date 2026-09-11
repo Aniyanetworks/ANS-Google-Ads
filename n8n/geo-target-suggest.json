@@ -1,0 +1,192 @@
+{
+  "name": "geo-target-suggest",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "geo-target-suggest",
+        "options": {},
+        "responseMode": "lastNode"
+      },
+      "id": "webhook-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        300
+      ],
+      "webhookId": "geo-target-suggest",
+      "notes": "Called by IntakeForm.tsx's location autocomplete as the agency types. Payload: { query }. Uses the default response mode (waits for the workflow to finish and responds with the last node's items as a JSON array) since the frontend needs the actual suggestion list back, unlike the fire-and-forget webhooks elsewhere in this project. Confirmed live: omitting responseMode does NOT default to waiting for the last node -- it defaults to an immediate {\"message\":\"Workflow was started\"} acknowledgment, so the frontend never got the real data. responseMode is now explicitly set to lastNode so the webhook actually waits and returns what the workflow produces."
+    },
+    {
+      "parameters": {
+        "jsCode": "const query = $json.body.query;\nif (typeof query !== 'string' || query.trim().length < 2) {\n  throw new Error('query missing or too short: ' + JSON.stringify(query));\n}\nreturn [{ json: { query: query.trim() } }];\n"
+      },
+      "id": "validate-1",
+      "name": "Validate query",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "google_ads_settings",
+        "limit": 1,
+        "filterType": "none"
+      },
+      "id": "get-creds-1",
+      "name": "Get Google Ads credentials",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://oauth2.googleapis.com/token",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "client_id",
+              "value": "={{ $('Get Google Ads credentials').item.json.client_id }}"
+            },
+            {
+              "name": "client_secret",
+              "value": "={{ $('Get Google Ads credentials').item.json.client_secret }}"
+            },
+            {
+              "name": "refresh_token",
+              "value": "={{ $('Get Google Ads credentials').item.json.refresh_token }}"
+            },
+            {
+              "name": "grant_type",
+              "value": "refresh_token"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "refresh-token-1",
+      "name": "Refresh Google Ads token",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://googleads.googleapis.com/v25/geoTargetConstants:suggest",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify({\n  \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').item.json.access_token,\n  \"developer-token\": $('Get Google Ads credentials').item.json.developer_token,\n  \"Content-Type\": \"application/json\"\n}) }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ locationNames: { names: [$('Validate query').item.json.query] }, locale: 'en' }) }}",
+        "options": {}
+      },
+      "id": "suggest-geo-1",
+      "name": "Suggest geo targets",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        680,
+        300
+      ],
+      "notes": "geoTargetConstants:suggest is a global service with no customer-scoped URL path (unlike most Google Ads REST endpoints) and no login-customer-id needed -- same convention build-campaign.json's 'Suggest geo targets' node already relies on."
+    },
+    {
+      "parameters": {
+        "jsCode": "const suggestions = $json.geoTargetConstantSuggestions || [];\nconst seen = new Set();\nconst output = [];\nfor (const s of suggestions) {\n  const gtc = s.geoTargetConstant;\n  if (!gtc || !gtc.resourceName || seen.has(gtc.resourceName)) continue;\n  seen.add(gtc.resourceName);\n  output.push({\n    json: {\n      resourceName: gtc.resourceName,\n      name: gtc.name,\n      canonicalName: gtc.canonicalName,\n      countryCode: gtc.countryCode,\n      targetType: gtc.targetType,\n    },\n  });\n  if (output.length >= 8) break;\n}\nreturn output;\n"
+      },
+      "id": "format-suggestions-1",
+      "name": "Format suggestions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        900,
+        300
+      ],
+      "notes": "One output item per suggestion (not one item holding an array) so the webhook's default response mode returns a flat JSON array the frontend can use directly. canonicalName (e.g. 'Cambridge,Ontario,Canada') is what gets stored in campaigns.targeted_locations -- fully disambiguated, so build-campaign.json's own later geoTargetConstants:suggest re-lookup at build time resolves it unambiguously instead of a bare city name that could match multiple places. Confirmed live: when this produces exactly one output item, n8n's default webhook response returns it as a bare JSON object rather than a 1-element array -- LocationAutocomplete.tsx normalizes both shapes on its end."
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate query": {
+      "main": [
+        [
+          {
+            "node": "Get Google Ads credentials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Google Ads credentials": {
+      "main": [
+        [
+          {
+            "node": "Refresh Google Ads token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Refresh Google Ads token": {
+      "main": [
+        [
+          {
+            "node": "Suggest geo targets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Suggest geo targets": {
+      "main": [
+        [
+          {
+            "node": "Format suggestions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

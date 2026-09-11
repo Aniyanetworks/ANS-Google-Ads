@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type RefObject } from "react";
 import { supabase } from "../lib/supabaseClient";
 import HintIcon from "./HintIcon";
+import LocationAutocomplete from "./LocationAutocomplete";
 
 const CAMPAIGN_TYPES = ["Search", "Display", "Performance Max", "Video"];
 const BIDDING_STRATEGIES = [
@@ -81,6 +82,12 @@ export default function IntakeForm({
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+
+    if (targetedLocations.length === 0) {
+      setError("Pick at least one targeted location.");
+      setSubmitting(false);
+      return;
+    }
 
     const { error: campaignError } = await supabase.from("campaigns").insert({
       id: campaignId,
@@ -231,12 +238,7 @@ export default function IntakeForm({
             defaultValue="English"
             required
           />
-          <Field
-            label="Targeted Locations (comma-separated)"
-            name="targetedLocations"
-            placeholder="e.g. Cambridge, Kitchener, Waterloo"
-            required
-          />
+          <LocationAutocomplete name="targetedLocations" />
         </div>
 
         <SelectField label="Ad Schedule" name="adSchedule" options={AD_SCHEDULES} required />

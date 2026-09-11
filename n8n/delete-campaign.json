@@ -5,7 +5,8 @@
       "parameters": {
         "httpMethod": "POST",
         "path": "delete-campaign",
-        "options": {}
+        "options": {},
+        "responseMode": "lastNode"
       },
       "id": "webhook-1",
       "name": "Webhook",
@@ -16,7 +17,7 @@
         300
       ],
       "webhookId": "delete-campaign",
-      "notes": "Called by ClientDetailPage.tsx's per-campaign Delete button. Payload: { campaign_id }. Waits for the workflow to finish (default response mode) before responding, so the frontend can safely remove the row from its view only after this confirms the delete actually happened."
+      "notes": "Called by ClientDetailPage.tsx's per-campaign Delete button. Payload: { campaign_id }. Waits for the workflow to finish (default response mode) before responding, so the frontend can safely remove the row from its view only after this confirms the delete actually happened. Confirmed live: omitting responseMode does NOT default to waiting for the last node -- it defaults to an immediate {\"message\":\"Workflow was started\"} acknowledgment, so the frontend never got the real data. responseMode is now explicitly set to lastNode so the webhook actually waits and returns what the workflow produces."
     },
     {
       "parameters": {
