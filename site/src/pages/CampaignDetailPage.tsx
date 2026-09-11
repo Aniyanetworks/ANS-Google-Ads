@@ -33,8 +33,8 @@ function formatType(type: string) {
 type Tab = "recommendations" | "assistant" | "messages";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "recommendations", label: "Recommendations" },
   { id: "assistant", label: "Campaign Assistant" },
+  { id: "recommendations", label: "Recommendations" },
   { id: "messages", label: "Client Suggestions" },
 ];
 
@@ -45,7 +45,7 @@ export default function CampaignDetailPage() {
   const [totals, setTotals] = useState({ cost: 0, conversions_value: 0 });
   const [recommendations, setRecommendations] = useState<Recommendation[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("recommendations");
+  const [tab, setTab] = useState<Tab>("assistant");
 
   useEffect(() => {
     if (!clientId || !campaignId) return;
