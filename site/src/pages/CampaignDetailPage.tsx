@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabaseClient";
 import CampaignChat from "../components/CampaignChat";
 import HintIcon from "../components/HintIcon";
 import MessageThread from "../components/MessageThread";
+import TrendChart from "../components/TrendChart";
 
 type Client = { id: string; name: string };
 type Campaign = {
@@ -19,8 +20,17 @@ type Recommendation = {
   dollars_recoverable: number;
   status: string;
 };
+type MetricRow = {
+  date: string;
+  cost: number;
+  conversions: number;
+  conversions_value: number;
+  impressions: number;
+  clicks: number;
+};
 
 const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+const numberFmt = new Intl.NumberFormat("en-US");
 
 function formatType(type: string) {
   return type
@@ -30,10 +40,11 @@ function formatType(type: string) {
     .join(" ");
 }
 
-type Tab = "recommendations" | "assistant" | "messages";
+type Tab = "recommendations" | "assistant" | "messages" | "performance";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "assistant", label: "Campaign Assistant" },
+  { id: "performance", label: "Performance" },
   { id: "recommendations", label: "Recommendations" },
   { id: "messages", label: "Client Suggestions" },
 ];
@@ -42,7 +53,14 @@ export default function CampaignDetailPage() {
   const { clientId, campaignId } = useParams<{ clientId: string; campaignId: string }>();
   const [client, setClient] = useState<Client | null>(null);
   const [campaign, setCampaign] = useState<Campaign | null>(null);
-  const [totals, setTotals] = useState({ cost: 0, conversions_value: 0 });
+  const [metrics, setMetrics] = useState<MetricRow[] | null>(null);
+  const [totals, setTotals] = useState({
+    cost: 0,
+    conversions_value: 0,
+    conversions: 0,
+    impressions: 0,
+    clicks: 0,
+  });
   const [recommendations, setRecommendations] = useState<Recommendation[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("assistant");
@@ -78,13 +96,27 @@ export default function CampaignDetailPage() {
 
       const { data: metricRows } = await supabase
         .from("campaign_metrics")
-        .select("cost, conversions_value")
-        .eq("campaign_id", campaignId);
+        .select("date, cost, conversions, conversions_value, impressions, clicks")
+        .eq("campaign_id", campaignId)
+        .order("date", { ascending: true });
 
-      const totalsAcc = { cost: 0, conversions_value: 0 };
-      for (const m of metricRows ?? []) {
-        totalsAcc.cost += Number(m.cost);
-        totalsAcc.conversions_value += Number(m.conversions_value);
+      const rows = (metricRows ?? []).map((m) => ({
+        date: m.date,
+        cost: Number(m.cost),
+        conversions: Number(m.conversions),
+        conversions_value: Number(m.conversions_value),
+        impressions: Number(m.impressions),
+        clicks: Number(m.clicks),
+      }));
+      setMetrics(rows);
+
+      const totalsAcc = { cost: 0, conversions_value: 0, conversions: 0, impressions: 0, clicks: 0 };
+      for (const m of rows) {
+        totalsAcc.cost += m.cost;
+        totalsAcc.conversions_value += m.conversions_value;
+        totalsAcc.conversions += m.conversions;
+        totalsAcc.impressions += m.impressions;
+        totalsAcc.clicks += m.clicks;
       }
       setTotals(totalsAcc);
 
@@ -118,6 +150,8 @@ export default function CampaignDetailPage() {
   }
 
   const roas = totals.cost > 0 ? totals.conversions_value / totals.cost : null;
+  const ctr = totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : null;
+  const avgCpc = totals.clicks > 0 ? totals.cost / totals.clicks : null;
 
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10 text-slate-900">
@@ -131,10 +165,14 @@ export default function CampaignDetailPage() {
           {campaign.google_ads_customer_id ? ` · Customer ID ${campaign.google_ads_customer_id}` : ""}
         </p>
 
-        <div className="mt-6 grid grid-cols-3 gap-4">
+        <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-7">
           <StatCard label="Cost" value={currency.format(totals.cost)} />
           <StatCard label="Conv. Value" value={currency.format(totals.conversions_value)} />
           <StatCard label="ROAS" value={roas === null ? "No spend yet" : `${roas.toFixed(2)}x`} />
+          <StatCard label="Impressions" value={numberFmt.format(totals.impressions)} />
+          <StatCard label="Clicks" value={numberFmt.format(totals.clicks)} />
+          <StatCard label="CTR" value={ctr === null ? "—" : `${ctr.toFixed(2)}%`} />
+          <StatCard label="Avg. CPC" value={avgCpc === null ? "—" : currency.format(avgCpc)} />
         </div>
 
         <div className="mt-10 flex gap-1 border-b border-slate-200">
@@ -162,6 +200,23 @@ export default function CampaignDetailPage() {
         </div>
 
         <section className="mt-6">
+          {tab === "performance" && (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <TrendChart
+                title="Cost by day"
+                data={(metrics ?? []).map((m) => ({ date: m.date, value: m.cost }))}
+                color="#0f172a"
+                format={(n) => currency.format(n)}
+              />
+              <TrendChart
+                title="Conv. value by day"
+                data={(metrics ?? []).map((m) => ({ date: m.date, value: m.conversions_value }))}
+                color="#059669"
+                format={(n) => currency.format(n)}
+              />
+            </div>
+          )}
+
           {tab === "recommendations" &&
             (recommendations === null ? (
               <p className="text-sm text-slate-500">Loading...</p>
@@ -206,7 +261,7 @@ function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
       <p className="text-xs font-medium uppercase text-slate-500">{label}</p>
-      <p className="mt-1 text-xl font-bold">{value}</p>
+      <p className="mt-1 text-lg font-bold leading-tight">{value}</p>
     </div>
   );
 }
