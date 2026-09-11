@@ -174,7 +174,13 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ operations: [{ remove: $('Prepare removal context').item.json.campaignResource }] }) }}",
-        "options": {}
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
       },
       "id": "remove-campaign-1",
       "name": "Remove campaign in Google Ads",
@@ -184,7 +190,7 @@
         1340,
         200
       ],
-      "notes": "Google Ads never hard-deletes a campaign -- 'remove' sets campaign.status to REMOVED. That's exactly what sync-metrics.json's discovery query already filters on (WHERE campaign.status != 'REMOVED') and what the sync's campaign-config branch now checks per-campaign to delete the Supabase row when Google Ads reports it removed -- this workflow and that check agree on the same convention."
+      "notes": "Google Ads never hard-deletes a campaign -- 'remove' sets campaign.status to REMOVED. That's exactly what sync-metrics.json's discovery query already filters on (WHERE campaign.status != 'REMOVED') and what the sync's campaign-config branch now checks per-campaign to delete the Supabase row when Google Ads reports it removed -- this workflow and that check agree on the same convention. neverError is on: a 4xx/5xx from Google Ads is returned as normal output instead of throwing, so 'Check removal result' can tell OPERATION_NOT_PERMITTED_FOR_REMOVED_RESOURCE (this campaign was already removed -- delete this row anyway) apart from a real failure (don't touch Supabase, surface it). Confirmed live: a campaign already removed in Google Ads (deleted earlier, directly or via a prior attempt whose Supabase cleanup never happened) made a second remove call fail with exactly this error, and the workflow used to just halt there."
     },
     {
       "parameters": {
@@ -214,6 +220,20 @@
         }
       },
       "notes": "Fed by both IF branches -- reached either after Google Ads confirms the remove, or directly when the campaign was never built there."
+    },
+    {
+      "parameters": {
+        "jsCode": "const res = $json;\nconst text = JSON.stringify(res);\nconst alreadyRemoved = text.includes('OPERATION_NOT_PERMITTED_FOR_REMOVED_RESOURCE');\nconst hasError = !!res.error;\n\nif (hasError && !alreadyRemoved) {\n  throw new Error('Failed to remove campaign in Google Ads: ' + text.slice(0, 800));\n}\n\nreturn [{ json: {} }];\n"
+      },
+      "id": "check-removal-result-1",
+      "name": "Check removal result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        200
+      ],
+      "notes": "Google Ads' desired end state (this campaign no longer active) is already true if it reports OPERATION_NOT_PERMITTED_FOR_REMOVED_RESOURCE, so that specific error is treated as success and the Supabase row still gets deleted below. Any OTHER error re-throws, which stops the workflow before 'Delete campaign row' runs -- the frontend then shows a real failure instead of silently deleting the Supabase row while the campaign might still be very much alive in Google Ads."
     }
   ],
   "connections": {
@@ -302,6 +322,17 @@
       ]
     },
     "Remove campaign in Google Ads": {
+      "main": [
+        [
+          {
+            "node": "Check removal result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check removal result": {
       "main": [
         [
           {

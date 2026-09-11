@@ -309,7 +309,9 @@
       "position": [
         1872,
         14752
-      ]
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "onError is set to continueRegularOutput: confirmed live that the model occasionally returns a malformed structured output for one item (e.g. {output: null} instead of a filled-in object) on a sparse/edge-case campaign (paused, $0 everything) -- an LLM quirk, not something the prompt reliably prevents. Without this, one bad item halted the entire sync run's proactive-suggestion branch. 'Prepare suggestion' below now handles the resulting error/missing-output item defensively instead of crashing on it."
     },
     {
       "parameters": {
@@ -327,7 +329,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const aiOutputs = $input.all();\nconst contexts = $('Build suggestion context').all();\n\nreturn aiOutputs.map((item, i) => {\n  const output = item.json.output;\n  const campaignRowId = (contexts[i] && contexts[i].json.campaignRowId) || null;\n  return {\n    json: {\n      campaignRowId,\n      shouldPost: !!output.should_post,\n      message: output.message,\n      proposedAction: output.proposed_action || null,\n      actionStatus: output.proposed_action ? 'proposed' : null,\n    },\n  };\n});\n"
+        "jsCode": "const aiOutputs = $input.all();\nconst contexts = $('Build suggestion context').all();\n\nreturn aiOutputs.map((item, i) => {\n  const campaignRowId = (contexts[i] && contexts[i].json.campaignRowId) || null;\n\n  // The model occasionally returns a malformed structured output for one\n  // item (e.g. {output: null}), or the AI Agent node's onError:\n  // continueRegularOutput setting passes through an item carrying .error\n  // instead of .output -- treat either as \"nothing to post\" rather than\n  // crashing the whole branch over one bad suggestion.\n  const output = item.json.output;\n  if (item.json.error || !output) {\n    return {\n      json: {\n        campaignRowId,\n        shouldPost: false,\n        message: '',\n        proposedAction: null,\n        actionStatus: null,\n      },\n    };\n  }\n\n  return {\n    json: {\n      campaignRowId,\n      shouldPost: !!output.should_post,\n      message: output.message,\n      proposedAction: output.proposed_action || null,\n      actionStatus: output.proposed_action ? 'proposed' : null,\n    },\n  };\n});\n"
       },
       "id": "2572e88f-0805-4c02-b44a-9a52135faa72",
       "name": "Prepare suggestion",
@@ -337,7 +339,7 @@
         2160,
         14752
       ],
-      "notes": "Iterates all campaigns by index, matching 'Suggest (AI Agent)' output items back to 'Build suggestion context' by position. UNVERIFIED assumption: that the AI Agent node processes multiple input items 1:1, preserving order, the same way native nodes do — I have no live access to confirm this for the LangChain agent node type specifically. If a second campaign's suggestion doesn't show up at all, or shows up with the wrong campaign's context, this is the node to check first."
+      "notes": "Iterates all campaigns by index, matching 'Suggest (AI Agent)' output items back to 'Build suggestion context' by position. UNVERIFIED assumption: that the AI Agent node processes multiple input items 1:1, preserving order, the same way native nodes do — I have no live access to confirm this for the LangChain agent node type specifically. If a second campaign's suggestion doesn't show up at all, or shows up with the wrong campaign's context, this is the node to check first. Confirmed live: the model sometimes returns {output: null} for one item (an LLM quirk on sparse campaigns, not a workflow bug) -- guarded against both that and an error-carrying item from the AI Agent's onError: continueRegularOutput setting, treating either as shouldPost: false instead of crashing on output.should_post."
     },
     {
       "parameters": {
