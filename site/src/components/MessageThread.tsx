@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
+import ThinkingIndicator from "./ThinkingIndicator";
 
 type Message = {
   id: string;
@@ -28,6 +29,14 @@ export default function MessageThread({
   useEffect(() => {
     load();
   }, [clientId, campaignId]);
+
+  useEffect(() => {
+    if (!messages?.some((m) => m.status === "new")) return;
+    // Poll while the AI draft is still pending so "Thinking..." resolves on
+    // its own once n8n finishes, without the agency needing to reload.
+    const interval = setInterval(load, 5000);
+    return () => clearInterval(interval);
+  }, [messages]);
 
   async function load() {
     let query = supabase
@@ -105,6 +114,12 @@ export default function MessageThread({
           </div>
           {m.subject && <p className="mt-1 text-sm font-medium text-slate-900">{m.subject}</p>}
           <p className="mt-1 whitespace-pre-wrap text-sm text-slate-700">{m.body}</p>
+
+          {m.direction === "inbound" && m.status === "new" && (
+            <div className="mt-3">
+              <ThinkingIndicator />
+            </div>
+          )}
 
           {m.status === "drafted" && (
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">

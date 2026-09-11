@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import ConfirmDialog from "./ConfirmDialog";
+import ThinkingIndicator from "./ThinkingIndicator";
 
 type ProposedAction = {
   action_type: "update_daily_budget" | "pause_campaign" | "resume_campaign";
@@ -46,7 +47,7 @@ export default function CampaignChat({ campaignId }: { campaignId: string | null
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  }, [messages, sending]);
 
   async function load() {
     if (!campaignId) return;
@@ -228,6 +229,13 @@ export default function CampaignChat({ campaignId }: { campaignId: string | null
             </div>
           </div>
         ))}
+
+        {sending && (
+          <div className="flex justify-start">
+            <ThinkingIndicator />
+          </div>
+        )}
+
         <div ref={bottomRef} />
       </div>
 

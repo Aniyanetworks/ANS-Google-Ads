@@ -22,6 +22,8 @@ type ClientRow = {
 };
 
 const RETRYABLE_STATUSES = ["pending", "building", "error"];
+const AUTO_SYNC_STORAGE_KEY = "dashboard-last-auto-sync";
+const AUTO_SYNC_MIN_INTERVAL_MS = 5 * 60 * 1000;
 
 const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
@@ -33,6 +35,17 @@ export default function DashboardPage() {
   const [pendingDelete, setPendingDelete] = useState<ClientRow | null>(null);
   const [editingClient, setEditingClient] = useState<ClientRow | null>(null);
   const [syncing, setSyncing] = useState(false);
+
+  useEffect(() => {
+    const lastSync = Number(sessionStorage.getItem(AUTO_SYNC_STORAGE_KEY) ?? 0);
+    if (Date.now() - lastSync < AUTO_SYNC_MIN_INTERVAL_MS) return;
+    sessionStorage.setItem(AUTO_SYNC_STORAGE_KEY, String(Date.now()));
+    handleSyncNow();
+    // Runs once when the dashboard is first opened — throttled via
+    // sessionStorage so navigating back to the dashboard repeatedly within
+    // a few minutes doesn't keep re-triggering Google Ads API calls.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     async function load() {
