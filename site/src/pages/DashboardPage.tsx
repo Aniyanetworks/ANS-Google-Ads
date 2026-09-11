@@ -196,7 +196,7 @@ export default function DashboardPage() {
           <div className="loading-bar h-full w-1/3 bg-slate-900" />
         </div>
       )}
-      <div className="mx-auto max-w-6xl">
+      <div className="mx-auto max-w-7xl">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold">Agency Dashboard</h1>

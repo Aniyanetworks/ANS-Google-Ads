@@ -143,7 +143,7 @@ export default function ClientDetailPage() {
 
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10 text-slate-900">
-      <div className="mx-auto max-w-5xl">
+      <div className="mx-auto max-w-6xl">
         <Link to="/dashboard" className="text-sm text-slate-500 hover:underline">
           ← All clients
         </Link>
