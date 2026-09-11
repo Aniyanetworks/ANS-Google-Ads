@@ -9,3 +9,19 @@ body,
 body {
   margin: 0;
 }
+
+@keyframes loading-bar-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  50% {
+    transform: translateX(20%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.loading-bar {
+  animation: loading-bar-slide 1.2s ease-in-out infinite;
+}

@@ -191,6 +191,11 @@ export default function DashboardPage() {
 
   return (
     <main className="min-h-screen bg-slate-50 px-6 py-10 text-slate-900">
+      {syncing && (
+        <div className="fixed left-0 top-0 z-50 h-1 w-full overflow-hidden bg-slate-200">
+          <div className="loading-bar h-full w-1/3 bg-slate-900" />
+        </div>
+      )}
       <div className="mx-auto max-w-6xl">
         <div className="flex items-center justify-between">
           <div>
@@ -213,9 +218,16 @@ export default function DashboardPage() {
             <button
               onClick={handleSyncNow}
               disabled={syncing}
-              className="rounded-lg border-2 border-slate-900 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-900 hover:text-white disabled:opacity-60"
+              className="flex items-center gap-2 rounded-lg border-2 border-slate-900 px-4 py-2 text-sm font-semibold text-slate-900 hover:bg-slate-900 hover:text-white disabled:opacity-60"
             >
               {syncing ? "Syncing..." : "Sync Now"}
+              {syncing && (
+                <span
+                  role="status"
+                  aria-label="Syncing"
+                  className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-slate-300 border-t-slate-900"
+                />
+              )}
             </button>
             <button
               onClick={async () => {
@@ -266,13 +278,24 @@ export default function DashboardPage() {
                 {clients.map((c) => (
                   <tr key={c.id} className="border-b border-slate-100 last:border-0">
                     <td className="px-4 py-3">
-                      <Link
-                        to={`/dashboard/clients/${c.id}`}
-                        className="font-medium text-slate-900 hover:underline"
-                      >
-                        {c.name}
-                      </Link>
-                      <p className="text-xs text-slate-500">{c.business_name}</p>
+                      <div className="flex items-center gap-2">
+                        {syncing && (
+                          <span
+                            role="status"
+                            aria-label="Syncing"
+                            className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-slate-300 border-t-slate-900"
+                          />
+                        )}
+                        <div>
+                          <Link
+                            to={`/dashboard/clients/${c.id}`}
+                            className="font-medium text-slate-900 hover:underline"
+                          >
+                            {c.name}
+                          </Link>
+                          <p className="text-xs text-slate-500">{c.business_name}</p>
+                        </div>
+                      </div>
                     </td>
                     <td className="px-4 py-3">{c.campaignCount}</td>
                     <td className="px-4 py-3 text-slate-500">{c.google_ads_customer_id ?? "—"}</td>
