@@ -1031,6 +1031,130 @@
         }
       },
       "notes": "Cascades to campaign_metrics/recommendations/campaign_chat_messages via their FK on_delete cascade -- matches the same cleanup delete-campaign.json does for an agency-initiated delete."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://googleads.googleapis.com/v25/customers/{{ $json.customerId }}/googleAds:search",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').first().json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').first().json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Filter buildable campaigns').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Filter buildable campaigns').item.json.loginCustomerId }\n    : {}\n)) }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: `SELECT segments.date, metrics.cost_micros, metrics.conversions, metrics.conversions_value, metrics.impressions, metrics.clicks FROM campaign WHERE campaign.id = ${$json.googleCampaignId} AND segments.date DURING LAST_30_DAYS` }) }}",
+        "options": {}
+      },
+      "id": "search-metrics-backfill-1",
+      "name": "Search campaign metrics (backfill)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        544,
+        15600
+      ],
+      "notes": "Reconciles the last 30 days every single sync run (schedule OR Sync Now), independent of the 'Search campaign metrics'/'Build metrics row' branch above (which only ever asks for YESTERDAY and feeds the AI-suggestion context -- left untouched since it's already fragile and assumes exactly one metrics row per campaign per run). Added after confirming live that a real day's spend ($28.54, 42 impressions, 1 click on Sep 16 for the HVAC campaign) was correctly returned by Google Ads but the dashboard still showed zero -- the daily schedule evidently didn't fire reliably for some days during this project's heavy debugging period, and the YESTERDAY-only query has no way to ever catch up on a missed day. This branch makes every sync self-healing: any day within the last 30 that's missing or stale in campaign_metrics gets reconciled, regardless of whether the schedule fired for it originally."
+    },
+    {
+      "parameters": {
+        "jsCode": "const campaigns = $('Filter buildable campaigns').all();\nconst searches = $('Search campaign metrics (backfill)').all();\nconst output = [];\n\ncampaigns.forEach((c, i) => {\n  const results = (searches[i] && searches[i].json.results) || [];\n  for (const row of results) {\n    output.push({\n      json: {\n        campaignRowId: c.json.campaignRowId,\n        campaign_id: c.json.campaignRowId,\n        date: row.segments.date,\n        cost: Number(row.metrics.costMicros || 0) / 1000000,\n        conversions: Number(row.metrics.conversions || 0),\n        conversions_value: Number(row.metrics.conversionsValue || 0),\n        impressions: Number(row.metrics.impressions || 0),\n        clicks: Number(row.metrics.clicks || 0),\n      },\n    });\n  }\n});\n\nreturn output;\n"
+      },
+      "id": "build-metrics-rows-backfill-1",
+      "name": "Build backfill metrics rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        15600
+      ],
+      "notes": "Unlike 'Build metrics row' (exactly 1 output item per campaign, index-aligned for the AI-suggestion branch), this emits ONE ITEM PER (campaign, date) PAIR -- up to 30 per campaign -- since its only job is writing history to campaign_metrics, not feeding anything that depends on 1:1 alignment. Days with zero activity simply don't appear in Google's results and are skipped here too, same convention as 'Build metrics row' uses for a day with no spend."
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "tableId": "campaign_metrics",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "campaign_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.campaign_id }}"
+            },
+            {
+              "keyName": "date",
+              "condition": "eq",
+              "keyValue": "={{ $json.date }}"
+            }
+          ]
+        }
+      },
+      "id": "delete-metrics-backfill-1",
+      "name": "Delete existing metrics row (backfill)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        992,
+        15600
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      },
+      "notes": "Delete-then-create per (campaign_id, date) pair, same idempotent pattern as 'Delete existing metrics row' -- makes re-running the backfill on overlapping date ranges safe. alwaysOutputData on for the same zero-rows-deleted-halts-the-workflow reason as everywhere else this pattern is used."
+    },
+    {
+      "parameters": {
+        "tableId": "campaign_metrics",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "campaign_id",
+              "fieldValue": "={{ $('Build backfill metrics rows').all()[$itemIndex].json.campaign_id }}"
+            },
+            {
+              "fieldId": "date",
+              "fieldValue": "={{ $('Build backfill metrics rows').all()[$itemIndex].json.date }}"
+            },
+            {
+              "fieldId": "cost",
+              "fieldValue": "={{ $('Build backfill metrics rows').all()[$itemIndex].json.cost }}"
+            },
+            {
+              "fieldId": "conversions",
+              "fieldValue": "={{ $('Build backfill metrics rows').all()[$itemIndex].json.conversions }}"
+            },
+            {
+              "fieldId": "conversions_value",
+              "fieldValue": "={{ $('Build backfill metrics rows').all()[$itemIndex].json.conversions_value }}"
+            },
+            {
+              "fieldId": "impressions",
+              "fieldValue": "={{ $('Build backfill metrics rows').all()[$itemIndex].json.impressions }}"
+            },
+            {
+              "fieldId": "clicks",
+              "fieldValue": "={{ $('Build backfill metrics rows').all()[$itemIndex].json.clicks }}"
+            }
+          ]
+        }
+      },
+      "id": "create-metrics-backfill-1",
+      "name": "Create metrics row (backfill)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1216,
+        15600
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
+        }
+      }
     }
   ],
   "connections": {
@@ -1103,6 +1227,11 @@
           },
           {
             "node": "Get campaign config",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search campaign metrics (backfill)",
             "type": "main",
             "index": 0
           }
@@ -1452,6 +1581,39 @@
         [
           {
             "node": "Update campaign config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search campaign metrics (backfill)": {
+      "main": [
+        [
+          {
+            "node": "Build backfill metrics rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build backfill metrics rows": {
+      "main": [
+        [
+          {
+            "node": "Delete existing metrics row (backfill)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete existing metrics row (backfill)": {
+      "main": [
+        [
+          {
+            "node": "Create metrics row (backfill)",
             "type": "main",
             "index": 0
           }

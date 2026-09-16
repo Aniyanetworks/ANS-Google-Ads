@@ -32,6 +32,15 @@ type MetricRow = {
 const currency = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 const numberFmt = new Intl.NumberFormat("en-US");
 
+function filterByRange(metrics: MetricRow[] | null, range: DateRange) {
+  if (!metrics || range === "all") return metrics;
+  const days = range === "7d" ? 7 : 30;
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+  return metrics.filter((m) => m.date >= cutoffStr);
+}
+
 function formatType(type: string) {
   return type
     .toLowerCase()
@@ -49,21 +58,23 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "messages", label: "Client Suggestions" },
 ];
 
+type DateRange = "7d" | "30d" | "all";
+
+const RANGE_OPTIONS: { id: DateRange; label: string }[] = [
+  { id: "7d", label: "Last 7 days" },
+  { id: "30d", label: "Last 30 days" },
+  { id: "all", label: "All time" },
+];
+
 export default function CampaignDetailPage() {
   const { clientId, campaignId } = useParams<{ clientId: string; campaignId: string }>();
   const [client, setClient] = useState<Client | null>(null);
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [metrics, setMetrics] = useState<MetricRow[] | null>(null);
-  const [totals, setTotals] = useState({
-    cost: 0,
-    conversions_value: 0,
-    conversions: 0,
-    impressions: 0,
-    clicks: 0,
-  });
   const [recommendations, setRecommendations] = useState<Recommendation[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("assistant");
+  const [dateRange, setDateRange] = useState<DateRange>("30d");
 
   useEffect(() => {
     if (!clientId || !campaignId) return;
@@ -110,16 +121,6 @@ export default function CampaignDetailPage() {
       }));
       setMetrics(rows);
 
-      const totalsAcc = { cost: 0, conversions_value: 0, conversions: 0, impressions: 0, clicks: 0 };
-      for (const m of rows) {
-        totalsAcc.cost += m.cost;
-        totalsAcc.conversions_value += m.conversions_value;
-        totalsAcc.conversions += m.conversions;
-        totalsAcc.impressions += m.impressions;
-        totalsAcc.clicks += m.clicks;
-      }
-      setTotals(totalsAcc);
-
       const { data: recRows } = await supabase
         .from("recommendations")
         .select("id, type, dollars_recoverable, status")
@@ -149,6 +150,17 @@ export default function CampaignDetailPage() {
     );
   }
 
+  const filteredMetrics = filterByRange(metrics, dateRange);
+
+  const totals = { cost: 0, conversions_value: 0, conversions: 0, impressions: 0, clicks: 0 };
+  for (const m of filteredMetrics ?? []) {
+    totals.cost += m.cost;
+    totals.conversions_value += m.conversions_value;
+    totals.conversions += m.conversions;
+    totals.impressions += m.impressions;
+    totals.clicks += m.clicks;
+  }
+
   const roas = totals.cost > 0 ? totals.conversions_value / totals.cost : null;
   const ctr = totals.impressions > 0 ? (totals.clicks / totals.impressions) * 100 : null;
   const avgCpc = totals.clicks > 0 ? totals.cost / totals.clicks : null;
@@ -165,7 +177,24 @@ export default function CampaignDetailPage() {
           {campaign.google_ads_customer_id ? ` · Customer ID ${campaign.google_ads_customer_id}` : ""}
         </p>
 
-        <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-7">
+        <div className="mt-6 flex justify-end gap-1">
+          {RANGE_OPTIONS.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => setDateRange(r.id)}
+              className={
+                "rounded-full px-3 py-1 text-xs font-medium transition " +
+                (dateRange === r.id
+                  ? "bg-slate-900 text-white"
+                  : "bg-slate-100 text-slate-600 hover:bg-slate-200")
+              }
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-7">
           <StatCard label="Cost" value={currency.format(totals.cost)} />
           <StatCard label="Conv. Value" value={currency.format(totals.conversions_value)} />
           <StatCard label="ROAS" value={roas === null ? "No spend yet" : `${roas.toFixed(2)}x`} />
@@ -204,13 +233,13 @@ export default function CampaignDetailPage() {
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               <TrendChart
                 title="Cost by day"
-                data={(metrics ?? []).map((m) => ({ date: m.date, value: m.cost }))}
+                data={(filteredMetrics ?? []).map((m) => ({ date: m.date, value: m.cost }))}
                 color="#0f172a"
                 format={(n) => currency.format(n)}
               />
               <TrendChart
                 title="Conv. value by day"
-                data={(metrics ?? []).map((m) => ({ date: m.date, value: m.conversions_value }))}
+                data={(filteredMetrics ?? []).map((m) => ({ date: m.date, value: m.conversions_value }))}
                 color="#059669"
                 format={(n) => currency.format(n)}
               />
