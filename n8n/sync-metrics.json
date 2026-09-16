@@ -543,7 +543,7 @@
         "jsonHeaders": "={{ JSON.stringify(Object.assign(\n  {\n    \"Authorization\": \"Bearer \" + $('Refresh Google Ads token').first().json.access_token,\n    \"developer-token\": $('Get Google Ads credentials').first().json.developer_token,\n    \"Content-Type\": \"application/json\"\n  },\n  $('Filter buildable campaigns').item.json.loginCustomerId\n    ? { \"login-customer-id\": $('Filter buildable campaigns').item.json.loginCustomerId }\n    : {}\n)) }}",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ query: `SELECT campaign.status, campaign_budget.amount_micros FROM campaign WHERE campaign.id = ${$('Filter buildable campaigns').item.json.googleCampaignId}` }) }}",
+        "jsonBody": "={{ JSON.stringify({ query: `SELECT campaign.status, campaign.name, campaign_budget.amount_micros FROM campaign WHERE campaign.id = ${$('Filter buildable campaigns').item.json.googleCampaignId}` }) }}",
         "options": {}
       },
       "id": "5f90f65a-2acd-4504-85fe-6f31b52362be",
@@ -558,7 +558,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const campaigns = $('Filter buildable campaigns').all();\nconst configs = $('Get campaign config').all();\nconst statusMap = { ENABLED: 'active', PAUSED: 'paused' };\nconst output = [];\n\ncampaigns.forEach((c, i) => {\n  const results = (configs[i] && configs[i].json.results) || [];\n  const row = results[0];\n  // No row back (campaign not found) or an explicit REMOVED status both\n  // mean this campaign no longer exists in Google Ads -- Google Ads never\n  // hard-deletes a campaign, 'removed' is the terminal state, same\n  // convention delete-campaign.json uses when the agency deletes from the\n  // dashboard. Route these to get deleted from Supabase too instead of\n  // silently going stale, so a delete on either side reflects on the other.\n  const removed = !row || row.campaign.status === 'REMOVED';\n  if (removed) {\n    output.push({ json: { campaignRowId: c.json.campaignRowId, removed: true } });\n    return;\n  }\n  output.push({\n    json: {\n      campaignRowId: c.json.campaignRowId,\n      removed: false,\n      status: statusMap[row.campaign.status] || 'paused',\n      dailyBudgetUsd: Number(row.campaignBudget.amountMicros || 0) / 1000000,\n    },\n  });\n});\n\nreturn output;\n"
+        "jsCode": "const campaigns = $('Filter buildable campaigns').all();\nconst configs = $('Get campaign config').all();\nconst statusMap = { ENABLED: 'active', PAUSED: 'paused' };\nconst output = [];\n\ncampaigns.forEach((c, i) => {\n  const results = (configs[i] && configs[i].json.results) || [];\n  const row = results[0];\n  // No row back (campaign not found) or an explicit REMOVED status both\n  // mean this campaign no longer exists in Google Ads -- Google Ads never\n  // hard-deletes a campaign, 'removed' is the terminal state, same\n  // convention delete-campaign.json uses when the agency deletes from the\n  // dashboard. Route these to get deleted from Supabase too instead of\n  // silently going stale, so a delete on either side reflects on the other.\n  const removed = !row || row.campaign.status === 'REMOVED';\n  if (removed) {\n    output.push({ json: { campaignRowId: c.json.campaignRowId, removed: true } });\n    return;\n  }\n  output.push({\n    json: {\n      campaignRowId: c.json.campaignRowId,\n      removed: false,\n      status: statusMap[row.campaign.status] || 'paused',\n      campaignName: row.campaign.name,\n      dailyBudgetUsd: Number(row.campaignBudget.amountMicros || 0) / 1000000,\n    },\n  });\n});\n\nreturn output;\n"
       },
       "id": "a2c8961d-6ffb-4c46-9429-faeb4c825297",
       "name": "Build campaign config update",
@@ -593,6 +593,10 @@
             {
               "fieldId": "daily_budget_usd",
               "fieldValue": "={{ $json.dailyBudgetUsd }}"
+            },
+            {
+              "fieldId": "campaign_name",
+              "fieldValue": "={{ $json.campaignName }}"
             }
           ]
         }
@@ -611,7 +615,7 @@
           "name": "Supabase Google Ads"
         }
       },
-      "notes": "Reconciles Supabase's status + daily_budget_usd to whatever Google Ads actually reports right now — this is what makes the dashboard trustworthy even for changes made outside this app entirely."
+      "notes": "Reconciles Supabase's status + daily_budget_usd + campaign_name to whatever Google Ads actually reports right now — this is what makes the dashboard trustworthy even for changes made outside this app entirely. campaign_name was added after a live bug: renaming a campaign directly in Google Ads (e.g. 'Cambridge + KW + Guelph' -> 'Ontario Campaign') never showed up in the dashboard, since this node previously only wrote back status and daily_budget_usd."
     },
     {
       "parameters": {
