@@ -155,94 +155,6 @@
     },
     {
       "parameters": {
-        "operation": "delete",
-        "tableId": "campaign_metrics",
-        "matchType": "allFilters",
-        "filters": {
-          "conditions": [
-            {
-              "keyName": "campaign_id",
-              "condition": "eq",
-              "keyValue": "={{ $json.campaign_id }}"
-            },
-            {
-              "keyName": "date",
-              "condition": "eq",
-              "keyValue": "={{ $json.date }}"
-            }
-          ]
-        }
-      },
-      "id": "3b8a56c4-211e-4635-ba0d-a36b38040b3e",
-      "name": "Delete existing metrics row",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
-      "position": [
-        992,
-        14752
-      ],
-      "alwaysOutputData": true,
-      "credentials": {
-        "supabaseApi": {
-          "id": "gW3hdy107B2DtcxQ",
-          "name": "Supabase Google Ads"
-        }
-      },
-      "notes": "Delete-then-create instead of upsert, since the native Supabase node's upsert support is unverified. Clears yesterday's row (if this campaign was already synced today) before inserting a fresh one — makes re-runs idempotent. The 'delete' operation itself is unverified against your instance; if its Field Name/ID dropdowns don't resolve, same fix pattern as everywhere else — tell me what the UI shows.\n\nalwaysOutputData is on: n8n treats zero rows deleted (the normal, expected first-ever-run case) as zero output items and halts the whole workflow there otherwise — confirmed live ('No output data returned')."
-    },
-    {
-      "parameters": {
-        "tableId": "campaign_metrics",
-        "fieldsUi": {
-          "fieldValues": [
-            {
-              "fieldId": "campaign_id",
-              "fieldValue": "={{ $('Build metrics row').all()[$itemIndex].json.campaign_id }}"
-            },
-            {
-              "fieldId": "date",
-              "fieldValue": "={{ $('Build metrics row').all()[$itemIndex].json.date }}"
-            },
-            {
-              "fieldId": "cost",
-              "fieldValue": "={{ $('Build metrics row').all()[$itemIndex].json.cost }}"
-            },
-            {
-              "fieldId": "conversions",
-              "fieldValue": "={{ $('Build metrics row').all()[$itemIndex].json.conversions }}"
-            },
-            {
-              "fieldId": "conversions_value",
-              "fieldValue": "={{ $('Build metrics row').all()[$itemIndex].json.conversions_value }}"
-            },
-            {
-              "fieldId": "impressions",
-              "fieldValue": "={{ $('Build metrics row').all()[$itemIndex].json.impressions }}"
-            },
-            {
-              "fieldId": "clicks",
-              "fieldValue": "={{ $('Build metrics row').all()[$itemIndex].json.clicks }}"
-            }
-          ]
-        }
-      },
-      "id": "551208f9-6fcd-4d55-b7bc-0f233627a72b",
-      "name": "Create metrics row",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
-      "position": [
-        1216,
-        14752
-      ],
-      "credentials": {
-        "supabaseApi": {
-          "id": "gW3hdy107B2DtcxQ",
-          "name": "Supabase Google Ads"
-        }
-      }
-    },
-    {
-      "parameters": {
         "operation": "getAll",
         "tableId": "recommendations",
         "limit": 20,
@@ -1070,91 +982,63 @@
     },
     {
       "parameters": {
-        "operation": "delete",
-        "tableId": "campaign_metrics",
-        "matchType": "allFilters",
-        "filters": {
-          "conditions": [
-            {
-              "keyName": "campaign_id",
-              "condition": "eq",
-              "keyValue": "={{ $json.campaign_id }}"
-            },
-            {
-              "keyName": "date",
-              "condition": "eq",
-              "keyValue": "={{ $json.date }}"
-            }
-          ]
+        "method": "POST",
+        "url": "=https://pbeqzrpyxnglppqofeqq.supabase.co/rest/v1/campaign_metrics?on_conflict=campaign_id,date",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify({ \"Prefer\": \"resolution=merge-duplicates,return=minimal\" }) }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ campaign_id: $json.campaign_id, date: $json.date, cost: $json.cost, conversions: $json.conversions, conversions_value: $json.conversions_value, impressions: $json.impressions, clicks: $json.clicks }) }}",
+        "options": {}
+      },
+      "id": "upsert-metrics-row-1",
+      "name": "Upsert metrics row",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        992,
+        14752
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "gW3hdy107B2DtcxQ",
+          "name": "Supabase Google Ads"
         }
       },
-      "id": "delete-metrics-backfill-1",
-      "name": "Delete existing metrics row (backfill)",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
+      "notes": "Replaces the old Delete-then-Create pair. Confirmed live: the native Supabase 'delete' node, when a single execution processes a batch of items where SOME match an existing row and SOME don't (e.g. a first-ever backfill run: 6 dates for one campaign, only 1 of which had a prior row), only outputs items for the ones that actually matched something -- it does NOT guarantee one output item per input item the way alwaysOutputData's own tooltip implies ('output an empty item if nothing would normally be returned' turned out to mean once per whole node execution, not once per input item that found nothing). Concretely: 6 items went into 'Delete existing metrics row (backfill)', only 1 came out, so 'Create metrics row (backfill)' (which depended on 1:1 index alignment with 'Build backfill metrics rows') only ever wrote that 1 row, silently dropping the other 5 real days of history every single run. This single upsert call (POST with on_conflict + Prefer: resolution=merge-duplicates) is atomic and processes exactly one item per HTTP request, guaranteed 1:1, with no batching ambiguity -- and doesn't need campaign_metrics' existing unique(campaign_id, date) constraint violated or worked around, it uses it directly for conflict resolution."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://pbeqzrpyxnglppqofeqq.supabase.co/rest/v1/campaign_metrics?on_conflict=campaign_id,date",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={{ JSON.stringify({ \"Prefer\": \"resolution=merge-duplicates,return=minimal\" }) }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ campaign_id: $json.campaign_id, date: $json.date, cost: $json.cost, conversions: $json.conversions, conversions_value: $json.conversions_value, impressions: $json.impressions, clicks: $json.clicks }) }}",
+        "options": {}
+      },
+      "id": "upsert-metrics-row-backfill-1",
+      "name": "Upsert metrics row (backfill)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         992,
         15600
       ],
-      "alwaysOutputData": true,
       "credentials": {
         "supabaseApi": {
           "id": "gW3hdy107B2DtcxQ",
           "name": "Supabase Google Ads"
         }
       },
-      "notes": "Delete-then-create per (campaign_id, date) pair, same idempotent pattern as 'Delete existing metrics row' -- makes re-running the backfill on overlapping date ranges safe. alwaysOutputData on for the same zero-rows-deleted-halts-the-workflow reason as everywhere else this pattern is used."
-    },
-    {
-      "parameters": {
-        "tableId": "campaign_metrics",
-        "fieldsUi": {
-          "fieldValues": [
-            {
-              "fieldId": "campaign_id",
-              "fieldValue": "={{ $('Build backfill metrics rows').all()[$itemIndex].json.campaign_id }}"
-            },
-            {
-              "fieldId": "date",
-              "fieldValue": "={{ $('Build backfill metrics rows').all()[$itemIndex].json.date }}"
-            },
-            {
-              "fieldId": "cost",
-              "fieldValue": "={{ $('Build backfill metrics rows').all()[$itemIndex].json.cost }}"
-            },
-            {
-              "fieldId": "conversions",
-              "fieldValue": "={{ $('Build backfill metrics rows').all()[$itemIndex].json.conversions }}"
-            },
-            {
-              "fieldId": "conversions_value",
-              "fieldValue": "={{ $('Build backfill metrics rows').all()[$itemIndex].json.conversions_value }}"
-            },
-            {
-              "fieldId": "impressions",
-              "fieldValue": "={{ $('Build backfill metrics rows').all()[$itemIndex].json.impressions }}"
-            },
-            {
-              "fieldId": "clicks",
-              "fieldValue": "={{ $('Build backfill metrics rows').all()[$itemIndex].json.clicks }}"
-            }
-          ]
-        }
-      },
-      "id": "create-metrics-backfill-1",
-      "name": "Create metrics row (backfill)",
-      "type": "n8n-nodes-base.supabase",
-      "typeVersion": 1,
-      "position": [
-        1216,
-        15600
-      ],
-      "credentials": {
-        "supabaseApi": {
-          "id": "gW3hdy107B2DtcxQ",
-          "name": "Supabase Google Ads"
-        }
-      }
+      "notes": "Replaces the old Delete-then-Create pair. Confirmed live: the native Supabase 'delete' node, when a single execution processes a batch of items where SOME match an existing row and SOME don't (e.g. a first-ever backfill run: 6 dates for one campaign, only 1 of which had a prior row), only outputs items for the ones that actually matched something -- it does NOT guarantee one output item per input item the way alwaysOutputData's own tooltip implies ('output an empty item if nothing would normally be returned' turned out to mean once per whole node execution, not once per input item that found nothing). Concretely: 6 items went into 'Delete existing metrics row (backfill)', only 1 came out, so 'Create metrics row (backfill)' (which depended on 1:1 index alignment with 'Build backfill metrics rows') only ever wrote that 1 row, silently dropping the other 5 real days of history every single run. This single upsert call (POST with on_conflict + Prefer: resolution=merge-duplicates) is atomic and processes exactly one item per HTTP request, guaranteed 1:1, with no batching ambiguity -- and doesn't need campaign_metrics' existing unique(campaign_id, date) constraint violated or worked around, it uses it directly for conflict resolution."
     }
   ],
   "connections": {
@@ -1253,29 +1137,7 @@
       "main": [
         [
           {
-            "node": "Delete existing metrics row",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Delete existing metrics row": {
-      "main": [
-        [
-          {
-            "node": "Create metrics row",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Create metrics row": {
-      "main": [
-        [
-          {
-            "node": "Get fresh recommendations",
+            "node": "Upsert metrics row",
             "type": "main",
             "index": 0
           }
@@ -1602,18 +1464,18 @@
       "main": [
         [
           {
-            "node": "Delete existing metrics row (backfill)",
+            "node": "Upsert metrics row (backfill)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Delete existing metrics row (backfill)": {
+    "Upsert metrics row": {
       "main": [
         [
           {
-            "node": "Create metrics row (backfill)",
+            "node": "Get fresh recommendations",
             "type": "main",
             "index": 0
           }
